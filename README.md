@@ -56,9 +56,7 @@ Without `-o`, the image is called `shotty-<date>-<time>.png` and lands in the cu
 | `--background <COLOR>` | Color around the window, `transparent` or `#rrggbb` |
 | `--font`, `--font-size`, `--line-height`, `--padding`, `--scale` | Typography and size |
 
-`shotty --help` and `man shotty` describe every option with its default.
-
-The themes are `one-dark`, `one-light`, `dracula`, `nord`, `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `github-dark`, `github-light` and `tokyo-night`.
+`shotty --help` and `man shotty` describe every option with its default and list the bundled themes.
 
 ## Configuration
 

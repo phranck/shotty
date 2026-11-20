@@ -6,7 +6,8 @@ use clap::builder::PossibleValuesParser;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use clap_complete::aot::Shell;
 
-use crate::theme;
+use crate::color::Backdrop;
+use crate::{settings, theme};
 
 /// Text shown after the option list of `shotty --help`.
 const AFTER_LONG_HELP: &str = "\
@@ -64,7 +65,7 @@ pub enum Command {
     /// Update shotty to the newest release through Homebrew
     Update,
 
-    /// Remove shotty, its man pages, shell completions and config from this computer
+    /// Remove shotty and its config; a Homebrew install also takes its man pages and completions
     Uninstall {
         /// Do not ask for confirmation
         #[arg(short, long)]
@@ -128,28 +129,33 @@ pub struct RenderArgs {
     #[arg(short, long, value_enum)]
     pub format: Option<ImageFormat>,
 
-    /// Color theme [default: one-dark]
-    #[arg(short, long, value_parser = PossibleValuesParser::new(theme::names()))]
+    /// Color theme.
+    #[arg(short, long, value_parser = PossibleValuesParser::new(theme::names()),
+          help = format!("Color theme [default: {}]", theme::DEFAULT_THEME))]
     pub theme: Option<String>,
 
     /// Font family installed on this system [default: the bundled JetBrains Mono]
     #[arg(long, value_name = "FAMILY")]
     pub font: Option<String>,
 
-    /// Font size in points [default: 14]
-    #[arg(long, value_name = "POINTS")]
+    /// Font size in points.
+    #[arg(long, value_name = "POINTS",
+          help = format!("Font size in points [default: {}]", settings::DEFAULT_FONT_SIZE))]
     pub font_size: Option<f32>,
 
-    /// Line height as a multiple of the font size [default: 1.4]
-    #[arg(long, value_name = "FACTOR")]
+    /// Line height as a multiple of the font size.
+    #[arg(long, value_name = "FACTOR",
+          help = format!("Line height as a multiple of the font size [default: {}]", settings::DEFAULT_LINE_HEIGHT))]
     pub line_height: Option<f32>,
 
-    /// Space between the text and the window edge, in points [default: 20]
-    #[arg(long, value_name = "POINTS")]
+    /// Space between the text and the window edge, in points.
+    #[arg(long, value_name = "POINTS",
+          help = format!("Space between the text and the window edge, in points [default: {}]", settings::DEFAULT_PADDING))]
     pub padding: Option<f32>,
 
-    /// Pixels per point; 2 gives sharp images on high resolution screens [default: 2]
-    #[arg(long, value_name = "FACTOR")]
+    /// Pixels per point; 2 gives sharp images on high resolution screens.
+    #[arg(long, value_name = "FACTOR",
+          help = format!("Pixels per point; 2 gives sharp images on high resolution screens [default: {}]", settings::DEFAULT_SCALE))]
     pub scale: Option<f32>,
 
     /// Text in the title bar of the window
@@ -164,16 +170,18 @@ pub struct RenderArgs {
     #[arg(long)]
     pub no_shadow: bool,
 
-    /// Color around the window: `transparent` or #rrggbb; a JPG shows white for transparent [default: transparent]
-    #[arg(long, value_name = "COLOR")]
+    /// Color around the window: `transparent` or #rrggbb; a JPG shows white for transparent.
+    #[arg(long, value_name = "COLOR",
+          help = format!("Color around the window: {0} or #rrggbb; a JPG shows white for {0} [default: {0}]", Backdrop::TRANSPARENT_KEYWORD))]
     pub background: Option<String>,
 
     /// Run COMMAND in a terminal and render its output instead of reading standard input; the title defaults to COMMAND
     #[arg(short, long, value_name = "COMMAND")]
     pub execute: Option<String>,
 
-    /// Terminal width: lines wrap there, and --execute gives the command a terminal this wide [default: 80 with --execute, else no wrapping]
-    #[arg(long, value_name = "COUNT", value_parser = clap::value_parser!(u16).range(1..))]
+    /// Terminal width: lines wrap there, and --execute gives the command a terminal this wide.
+    #[arg(long, value_name = "COUNT",
+          help = format!("Terminal width: lines wrap there, and --execute gives the command a terminal this wide [default: {} with --execute, else no wrapping]", settings::DEFAULT_EXECUTE_COLUMNS))]
     pub columns: Option<u16>,
 
     /// Also copy the image to the clipboard (needs wl-copy or xclip on Linux)

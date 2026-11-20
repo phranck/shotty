@@ -71,11 +71,15 @@ fn render_input(args: RenderArgs) -> Result<()> {
     let copy_to_clipboard = args.clipboard;
     let settings = Settings::resolve(args, config, &now)?;
 
-    let input = match &command {
-        Some(command) => run_command(command, settings.columns.unwrap_or(DEFAULT_EXECUTE_COLUMNS))?,
-        None => read_stdin()?,
+    // A command always runs in a terminal of some width; piped lines stay whole unless a width is set.
+    let (input, columns) = match &command {
+        Some(command) => {
+            let columns = settings.columns.unwrap_or(DEFAULT_EXECUTE_COLUMNS);
+            (run_command(command, columns)?, Some(columns))
+        }
+        None => (read_stdin()?, settings.columns),
     };
-    let screen = Screen::parse(&input, settings.columns.map(usize::from));
+    let screen = Screen::parse(&input, columns.map(usize::from));
     if screen.lines.is_empty() {
         bail!("the input is empty, so there is nothing to render");
     }
