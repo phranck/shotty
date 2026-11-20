@@ -1,0 +1,94 @@
+name: Release
+
+# A release starts with an annotated tag whose message is the release notes:
+#   git tag -a v0.1.0 -F notes.md && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: rustup toolchain install && rustup target add ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        run: scripts/package.sh "${GITHUB_REF_NAME#v}" ${{ matrix.target }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: dist/shotty-*
+          if-no-files-found: error
+
+  release:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the draft with all archives
+        run: |
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > notes.md
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "shotty ${GITHUB_REF_NAME#v}" --notes-file notes.md dist/*
+      - name: Publish once every archive is attached
+        run: |
+          expected=$(find dist -type f | wc -l)
+          attached=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')
+          if [ "$attached" -ne "$expected" ] || [ "$expected" -ne 8 ]; then
+            echo "expected 8 assets, built $expected, attached $attached" >&2
+            exit 1
+          fi
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+
+  formula:
+    name: Update the Homebrew formula
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write shotty.rb into phranck/homebrew-tap
+        env:
+          # A token with write access to the contents of phranck/homebrew-tap.
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          scripts/formula.sh "$version" dist > shotty.rb
+          path=repos/phranck/homebrew-tap/contents/shotty.rb
+          sha=$(gh api "$path" --jq .sha 2>/dev/null || true)
+          gh api --method PUT "$path" \
+            -f message="Chore: shotty $version" \
+            -f content="$(base64 -w0 shotty.rb)" \
+            ${sha:+-f sha="$sha"}
