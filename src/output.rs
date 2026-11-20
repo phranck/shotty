@@ -1,4 +1,4 @@
-//! Encodes a rendered canvas as PNG or JPG and writes it to disk.
+//! Encodes a rendered image as PNG or JPG and writes it to disk.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -17,39 +17,63 @@ use crate::render::Canvas;
 const JPEG_QUALITY: u8 = 92;
 
 /// Bytes per pixel in straight alpha RGBA.
-const RGBA_BYTES: usize = 4;
+pub const RGBA_BYTES: usize = 4;
 
-/// Encodes `canvas` in `format` and writes it to `path`, replacing an existing file.
+/// A finished picture as straight alpha RGBA, the form encoders and clipboards take.
+pub struct Image {
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// `RGBA_BYTES` per pixel, row by row from the top.
+    pub rgba: Vec<u8>,
+}
+
+impl From<Canvas> for Image {
+    fn from(canvas: Canvas) -> Self {
+        let (width, height) = (canvas.width(), canvas.height());
+        Self {
+            width,
+            height,
+            rgba: canvas.into_straight_rgba(),
+        }
+    }
+}
+
+/// Encodes `image` in `format` and writes it to `path`, replacing an existing file.
 ///
 /// A JPG has no transparency, so transparent and translucent pixels are laid over white.
 ///
 /// # Errors
 ///
 /// Fails when the file cannot be created or written, or when encoding fails.
-pub fn write(canvas: Canvas, format: ImageFormat, path: &Path) -> Result<()> {
+pub fn write(image: &Image, format: ImageFormat, path: &Path) -> Result<()> {
     let file = File::create(path).with_context(|| format!("cannot create {}", path.display()))?;
     let mut writer = BufWriter::new(file);
-    encode(canvas, format, &mut writer)
+    encode(image, format, &mut writer)
         .with_context(|| format!("cannot write {}", path.display()))?;
     writer
         .flush()
         .with_context(|| format!("cannot write {}", path.display()))
 }
 
-/// Encodes `canvas` in `format` into `writer`.
+/// Encodes `image` in `format` into `writer`.
 ///
 /// # Errors
 ///
 /// Fails when the encoder or the writer fails.
-pub fn encode(canvas: Canvas, format: ImageFormat, writer: &mut impl Write) -> Result<()> {
-    let (width, height) = (canvas.width(), canvas.height());
-    let rgba = canvas.into_straight_rgba();
+pub fn encode(image: &Image, format: ImageFormat, writer: &mut impl Write) -> Result<()> {
+    let Image {
+        width,
+        height,
+        ref rgba,
+    } = *image;
     match format {
         ImageFormat::Png => {
-            PngEncoder::new(writer).write_image(&rgba, width, height, ExtendedColorType::Rgba8)?
+            PngEncoder::new(writer).write_image(rgba, width, height, ExtendedColorType::Rgba8)?
         }
         ImageFormat::Jpg => {
-            let rgb = flatten(&rgba, Rgb::WHITE);
+            let rgb = flatten(rgba, Rgb::WHITE);
             JpegEncoder::new_with_quality(writer, JPEG_QUALITY).write_image(
                 &rgb,
                 width,
@@ -104,7 +128,7 @@ mod tests {
             (ImageFormat::Jpg, JPEG_SIGNATURE),
         ] {
             let mut bytes = Vec::new();
-            encode(Canvas::new(3, 2).unwrap(), format, &mut bytes).unwrap();
+            encode(&Image::from(Canvas::new(3, 2).unwrap()), format, &mut bytes).unwrap();
             assert!(bytes.starts_with(signature), "{format:?}");
         }
     }

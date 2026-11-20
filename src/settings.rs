@@ -37,6 +37,9 @@ pub const DEFAULT_PADDING: f32 = 20.0;
 /// Pixels per point when nothing else sets it. `2` matches high resolution screens.
 pub const DEFAULT_SCALE: f32 = 2.0;
 
+/// Terminal width for `--execute` when nothing else sets it, the classic terminal width.
+pub const DEFAULT_EXECUTE_COLUMNS: u16 = 80;
+
 /// Smallest accepted font size in points. Below it glyphs turn into noise.
 const MIN_FONT_SIZE: f32 = 4.0;
 
@@ -82,6 +85,8 @@ pub struct ConfigFile {
     pub shadow: Option<bool>,
     /// `transparent` or `#rrggbb`.
     pub background: Option<String>,
+    /// Terminal width in columns.
+    pub columns: Option<u16>,
 }
 
 impl ConfigFile {
@@ -145,6 +150,9 @@ pub struct Settings {
     pub shadow: bool,
     /// Color around the window.
     pub backdrop: Backdrop,
+    /// Terminal width: where lines wrap and how wide `--execute` makes the terminal. `None` keeps
+    /// lines whole; with `--execute` it is `DEFAULT_EXECUTE_COLUMNS` unless set.
+    pub columns: Option<u16>,
 }
 
 impl Settings {
@@ -211,10 +219,14 @@ impl Settings {
                 MIN_SCALE,
                 MAX_SCALE,
             )?,
-            title: args.title,
+            title: args.title.or_else(|| args.execute.clone()),
             window: !args.no_window && config.window.unwrap_or(true),
             shadow: !args.no_shadow && config.shadow.unwrap_or(true),
             backdrop,
+            columns: args
+                .columns
+                .or(config.columns)
+                .or(args.execute.is_some().then_some(DEFAULT_EXECUTE_COLUMNS)),
         })
     }
 }
@@ -295,6 +307,21 @@ mod tests {
     }
 
     #[test]
+    fn execute_sets_title_and_terminal_width() {
+        let args = RenderArgs {
+            execute: Some("git status".to_owned()),
+            ..RenderArgs::default()
+        };
+        let settings = Settings::resolve(args, ConfigFile::default(), NOW).unwrap();
+        assert_eq!(settings.title.as_deref(), Some("git status"));
+        assert_eq!(settings.columns, Some(DEFAULT_EXECUTE_COLUMNS));
+
+        let settings =
+            Settings::resolve(RenderArgs::default(), ConfigFile::default(), NOW).unwrap();
+        assert_eq!(settings.columns, None);
+    }
+
+    #[test]
     fn unknown_config_key_is_an_error() {
         assert!(toml::from_str::<ConfigFile>("colour = \"red\"").is_err());
     }
@@ -337,6 +364,9 @@ mod tests {
         assert!(help_of("line_height").contains(&format!("[default: {DEFAULT_LINE_HEIGHT}]")));
         assert!(help_of("padding").contains(&format!("[default: {DEFAULT_PADDING}]")));
         assert!(help_of("scale").contains(&format!("[default: {DEFAULT_SCALE}]")));
+        assert!(help_of("columns").contains(&format!(
+            "[default: {DEFAULT_EXECUTE_COLUMNS} with --execute"
+        )));
         assert!(
             help_of("background")
                 .contains(&format!("[default: {}]", Backdrop::TRANSPARENT_KEYWORD))
