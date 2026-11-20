@@ -13,14 +13,16 @@ EXAMPLES:
     ls -la --color=always | shotty -o listing.png
     git log --oneline --color=always | shotty --theme dracula --title \"git log\"
     cargo build 2>&1 | shotty -o build.jpg --no-window
+    shotty --execute \"git status\" --clipboard
 
 Many programs switch colors off when their output goes into a pipe. Ask them for color, usually
-with --color=always.
+with --color=always, or let shotty run the command in a terminal with --execute.
 
 CONFIGURATION:
-    Defaults for every rendering option can be set in $XDG_CONFIG_HOME/shotty/config.toml, which
-    is ~/.config/shotty/config.toml when XDG_CONFIG_HOME is not set. Keys are the long option names
-    without the leading dashes, for example:
+    Defaults can be set in $XDG_CONFIG_HOME/shotty/config.toml, which is
+    ~/.config/shotty/config.toml when XDG_CONFIG_HOME is not set. Keys are the long option names
+    without the leading dashes. `window = false` and `shadow = false` stand for --no-window and
+    --no-shadow. --output, --title, --execute and --clipboard have no key. For example:
 
         theme = \"nord\"
         font-size = 16
@@ -35,8 +37,8 @@ CONFIGURATION:
     name = "shotty",
     version,
     about = "Turn the output of a command into a PNG or JPG image",
-    long_about = "Reads terminal output, ANSI colors included, from standard input and renders it as \
-                  a PNG or JPG that looks like a terminal window.",
+    long_about = "Reads terminal output, ANSI colors included, from standard input or from a command it \
+                  runs, and renders it as a PNG or JPG that looks like a terminal window.",
     after_long_help = AFTER_LONG_HELP,
 )]
 pub struct Cli {
@@ -126,6 +128,18 @@ pub struct RenderArgs {
     /// Color around the window: `transparent` or #rrggbb; a JPG shows white for transparent [default: transparent]
     #[arg(long, value_name = "COLOR")]
     pub background: Option<String>,
+
+    /// Run COMMAND in a terminal and render its output instead of reading standard input; the title defaults to COMMAND
+    #[arg(short, long, value_name = "COMMAND")]
+    pub execute: Option<String>,
+
+    /// Terminal width: lines wrap there, and --execute gives the command a terminal this wide [default: 80 with --execute, else no wrapping]
+    #[arg(long, value_name = "COUNT", value_parser = clap::value_parser!(u16).range(1..))]
+    pub columns: Option<u16>,
+
+    /// Also copy the image to the clipboard (needs wl-copy or xclip on Linux)
+    #[arg(short, long)]
+    pub clipboard: bool,
 }
 
 #[cfg(test)]

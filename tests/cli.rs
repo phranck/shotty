@@ -109,3 +109,22 @@ fn config_file_supplies_defaults() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("config.toml"));
 }
+
+#[test]
+fn execute_runs_the_command_in_a_terminal() {
+    let scratch = Scratch::new("execute");
+    let output = run(
+        scratch.path(),
+        &["-e", "test -t 1 && echo tty", "-o", "out.png"],
+        b"",
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(scratch.path().join("out.png").is_file());
+
+    let output = run(scratch.path(), &["-e", "test -t 1", "-o", "none.png"], b"");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("empty"));
+}
