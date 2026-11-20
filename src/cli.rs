@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 
 use clap::builder::PossibleValuesParser;
-use clap::{Args, Parser, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap_complete::aot::Shell;
 
 use crate::theme;
 
@@ -15,14 +16,16 @@ EXAMPLES:
     cargo build 2>&1 | shotty -o build.jpg --no-window
     shotty --execute \"git status\" --clipboard
 
-Many programs switch colors off when their output goes into a pipe. Ask them for color, usually
-with --color=always, or let shotty run the command in a terminal with --execute.
+Many programs switch colors off when their output goes into a pipe. Ask
+them for color, usually with --color=always, or let shotty run the command
+in a terminal with --execute.
 
 CONFIGURATION:
     Defaults can be set in $XDG_CONFIG_HOME/shotty/config.toml, which is
-    ~/.config/shotty/config.toml when XDG_CONFIG_HOME is not set. Keys are the long option names
-    without the leading dashes. `window = false` and `shadow = false` stand for --no-window and
-    --no-shadow. --output, --title, --execute and --clipboard have no key. For example:
+    ~/.config/shotty/config.toml when XDG_CONFIG_HOME is not set. Keys are
+    the long option names without the leading dashes. `window = false` and
+    `shadow = false` stand for --no-window and --no-shadow. --output,
+    --title, --execute and --clipboard have no key. For example:
 
         theme = \"nord\"
         font-size = 16
@@ -40,11 +43,47 @@ CONFIGURATION:
     long_about = "Reads terminal output, ANSI colors included, from standard input or from a command it \
                   runs, and renders it as a PNG or JPG that looks like a terminal window.",
     after_long_help = AFTER_LONG_HELP,
+    args_conflicts_with_subcommands = true,
 )]
 pub struct Cli {
+    /// A maintenance task; without one, shotty renders.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// What to render and how.
     #[command(flatten)]
     pub render: RenderArgs,
+}
+
+/// Tasks other than rendering.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Print the version
+    Version,
+
+    /// Update shotty to the newest release through Homebrew
+    Update,
+
+    /// Remove shotty, its man pages, shell completions and config from this computer
+    Uninstall {
+        /// Do not ask for confirmation
+        #[arg(short, long)]
+        yes: bool,
+    },
+
+    /// Print a shell completion script, for example: shotty completions zsh > _shotty
+    Completions {
+        /// Shell to write the script for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+
+    /// Write the man pages into DIRECTORY, for packaging
+    #[command(hide = true)]
+    Manpages {
+        /// Existing directory that receives `shotty.1` and one page per subcommand
+        directory: PathBuf,
+    },
 }
 
 /// Image formats shotty writes.

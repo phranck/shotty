@@ -5,6 +5,7 @@ mod capture;
 mod cli;
 mod clipboard;
 mod color;
+mod maintenance;
 mod output;
 mod render;
 mod settings;
@@ -17,7 +18,7 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 
 use crate::ansi::Screen;
-use crate::cli::{Cli, RenderArgs};
+use crate::cli::{Cli, Command, RenderArgs};
 use crate::output::Image;
 use crate::settings::{ConfigFile, DEFAULT_EXECUTE_COLUMNS, Settings};
 
@@ -36,7 +37,20 @@ fn main() -> ExitCode {
 
 /// Carries out what the command line asks for.
 fn run(cli: Cli) -> Result<()> {
-    render_input(cli.render)
+    match cli.command {
+        None => render_input(cli.render),
+        Some(Command::Version) => {
+            maintenance::print_version();
+            Ok(())
+        }
+        Some(Command::Update) => maintenance::update(),
+        Some(Command::Uninstall { yes }) => maintenance::uninstall(yes),
+        Some(Command::Completions { shell }) => {
+            maintenance::print_completions(shell);
+            Ok(())
+        }
+        Some(Command::Manpages { directory }) => maintenance::write_manpages(&directory),
+    }
 }
 
 /// Renders standard input or the output of `--execute` to an image and prints the image's path.
