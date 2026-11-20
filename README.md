@@ -7,7 +7,7 @@
 [![code size](https://img.shields.io/github/languages/code-size/phranck/shotty?style=flat&color=1e88e5&label=code%20size)](https://github.com/phranck/shotty)
 [![stars](https://img.shields.io/github/stars/phranck/shotty?style=flat&color=8e24aa&label=stars)](https://github.com/phranck/shotty)
 
-<img src="docs/hero.png" alt="A terminal window showing a Rust compiler error, rendered by shotty" width="860">
+<img src="docs/hero.png" alt="A terminal window showing neofetch's system overview, rendered by shotty" width="860">
 
 </div>
 
