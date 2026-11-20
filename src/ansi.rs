@@ -15,33 +15,96 @@ const TAB_WIDTH: usize = 8;
 /// Number of columns a wide character such as a CJK ideograph takes.
 const WIDE_CHARACTER_WIDTH: usize = 2;
 
-/// SGR parameters that `ansi::Screen::select_graphic_rendition` understands.
+/// Columns beyond this one are dropped. It keeps a cursor movement such as `CSI 30000 C` from
+/// creating a line wider than any picture can be.
+pub const MAX_COLUMNS: usize = 4096;
+
+/// Lines beyond this one are dropped, for the same reason as `MAX_COLUMNS`.
+const MAX_LINES: usize = 100_000;
+
+/// Control characters that move the cursor, as `Perform::execute` receives them.
+mod control {
+    /// Moves to the start of the next line. The terminal driver adds the carriage return that
+    /// piped text leaves out, so this also returns to the first column.
+    pub const LINE_FEED: u8 = b'\n';
+    /// Treated like a line feed, as terminals do.
+    pub const VERTICAL_TAB: u8 = 0x0b;
+    /// Treated like a line feed, as terminals do.
+    pub const FORM_FEED: u8 = 0x0c;
+    /// Returns to the first column.
+    pub const CARRIAGE_RETURN: u8 = b'\r';
+    /// Moves to the next tab stop.
+    pub const TAB: u8 = b'\t';
+    /// Moves one column back.
+    pub const BACKSPACE: u8 = 0x08;
+}
+
+/// Parameters of the erase sequences `CSI K` and `CSI J`.
+mod erase {
+    /// From the cursor to the end.
+    pub const TO_END: u16 = 0;
+    /// From the start to the cursor.
+    pub const TO_START: u16 = 1;
+    /// Everything.
+    pub const ALL: u16 = 2;
+    /// Everything including the scrollback, which for a picture is the same as `ALL`.
+    pub const ALL_AND_SCROLLBACK: u16 = 3;
+}
+
+/// SGR parameters that `ScreenBuilder::select_graphic_rendition` understands, as ECMA-48 and xterm
+/// define them.
 mod sgr {
+    /// Back to the default style.
     pub const RESET: u16 = 0;
+    /// Bold weight.
     pub const BOLD: u16 = 1;
+    /// Faint text.
     pub const DIM: u16 = 2;
+    /// Italic style.
     pub const ITALIC: u16 = 3;
+    /// Underline; `4:0` in the colon form switches it off.
     pub const UNDERLINE: u16 = 4;
+    /// Foreground and background swapped.
     pub const INVERSE: u16 = 7;
+    /// A line through the text.
     pub const STRIKETHROUGH: u16 = 9;
+    /// Double underline, drawn as a single one.
     pub const DOUBLE_UNDERLINE: u16 = 21;
+    /// Neither bold nor faint.
     pub const NORMAL_INTENSITY: u16 = 22;
+    /// Italic off.
     pub const NO_ITALIC: u16 = 23;
+    /// Underline off.
     pub const NO_UNDERLINE: u16 = 24;
+    /// Inverse off.
     pub const NO_INVERSE: u16 = 27;
+    /// Strikethrough off.
     pub const NO_STRIKETHROUGH: u16 = 29;
+    /// Foreground ANSI color `0`; up to `FOREGROUND_LAST` for color `7`.
     pub const FOREGROUND_FIRST: u16 = 30;
+    /// Foreground ANSI color `7`.
     pub const FOREGROUND_LAST: u16 = 37;
+    /// Foreground from the 256 color palette or a true color, see `extended_color`.
     pub const FOREGROUND_EXTENDED: u16 = 38;
+    /// The theme's foreground.
     pub const FOREGROUND_DEFAULT: u16 = 39;
+    /// Background ANSI color `0`; up to `BACKGROUND_LAST` for color `7`.
     pub const BACKGROUND_FIRST: u16 = 40;
+    /// Background ANSI color `7`.
     pub const BACKGROUND_LAST: u16 = 47;
+    /// Background from the 256 color palette or a true color, see `extended_color`.
     pub const BACKGROUND_EXTENDED: u16 = 48;
+    /// The theme's background.
     pub const BACKGROUND_DEFAULT: u16 = 49;
+    /// Underline color; read so its parameters are skipped, then ignored.
     pub const UNDERLINE_COLOR_EXTENDED: u16 = 58;
+    /// Foreground ANSI color `8`; up to `BRIGHT_FOREGROUND_LAST` for color `15`.
     pub const BRIGHT_FOREGROUND_FIRST: u16 = 90;
+    /// Foreground ANSI color `15`.
     pub const BRIGHT_FOREGROUND_LAST: u16 = 97;
+    /// Background ANSI color `8`; up to `BRIGHT_BACKGROUND_LAST` for color `15`.
     pub const BRIGHT_BACKGROUND_FIRST: u16 = 100;
+    /// Background ANSI color `15`.
     pub const BRIGHT_BACKGROUND_LAST: u16 = 107;
     /// Offset from a normal ANSI color index to its bright counterpart.
     pub const BRIGHT_OFFSET: u8 = 8;
@@ -166,8 +229,12 @@ impl ScreenBuilder {
         &mut self.lines[self.row]
     }
 
-    /// Writes a cell at `column` of the cursor line, filling any gap before it with blanks.
+    /// Writes a cell at `column` of the cursor line, filling any gap before it with blanks. Cells
+    /// beyond `MAX_COLUMNS` and lines beyond `MAX_LINES` are dropped.
     fn put(&mut self, column: usize, cell: Cell) {
+        if column >= MAX_COLUMNS || self.row >= MAX_LINES {
+            return;
+        }
         let line = self.current_line();
         if line.len() <= column {
             line.resize_with(column + 1, Cell::blank);
@@ -183,33 +250,36 @@ impl ScreenBuilder {
 
     /// Erases part of the cursor line, as `CSI K` does.
     ///
-    /// `mode` `0` erases from the cursor to the end, `1` from the start to the cursor, `2` the whole
-    /// line. Other values change nothing.
+    /// `mode` is one of the `erase` constants; `erase::ALL_AND_SCROLLBACK` and unknown values change
+    /// nothing, as in terminals.
     fn erase_in_line(&mut self, mode: u16) {
+        if self.row >= MAX_LINES {
+            return;
+        }
         let column = self.column;
         let line = self.current_line();
         match mode {
-            0 => line.truncate(column),
-            1 => line
+            erase::TO_END => line.truncate(column),
+            erase::TO_START => line
                 .iter_mut()
                 .take(column + 1)
                 .for_each(|cell| *cell = Cell::blank()),
-            2 => line.clear(),
+            erase::ALL => line.clear(),
             _ => {}
         }
     }
 
     /// Erases part of the screen, as `CSI J` does.
     ///
-    /// `mode` `0` erases from the cursor to the end, `2` and `3` everything. Erasing from the start,
-    /// mode `1`, is ignored because the output above stays relevant for a picture.
+    /// `mode` is one of the `erase` constants. Erasing from the start is ignored because the output
+    /// above stays relevant for a picture.
     fn erase_in_display(&mut self, mode: u16) {
         match mode {
-            0 => {
-                self.erase_in_line(0);
+            erase::TO_END => {
+                self.erase_in_line(erase::TO_END);
                 self.lines.truncate(self.row + 1);
             }
-            2 | 3 => self.lines.clear(),
+            erase::ALL | erase::ALL_AND_SCROLLBACK => self.lines.clear(),
             _ => {}
         }
     }
@@ -351,11 +421,15 @@ fn count_parameter(params: &Params, default: u16) -> usize {
 }
 
 impl Perform for ScreenBuilder {
+    /// Writes a printable character at the cursor and advances it by the character's width.
     fn print(&mut self, character: char) {
         let Some(width) = character.width() else {
             return;
         };
         if width == 0 {
+            if self.row >= MAX_LINES {
+                return;
+            }
             // A combining mark joins the character before it, skipping the second half of a wide one.
             let column = self.column;
             let line = self.current_line();
@@ -393,21 +467,24 @@ impl Perform for ScreenBuilder {
         self.column += width;
     }
 
+    /// Applies a control character; see the `control` constants.
     fn execute(&mut self, byte: u8) {
         match byte {
-            b'\n' | 0x0b | 0x0c => self.new_line(),
-            b'\r' => self.column = 0,
-            b'\t' => {
+            control::LINE_FEED | control::VERTICAL_TAB | control::FORM_FEED => self.new_line(),
+            control::CARRIAGE_RETURN => self.column = 0,
+            control::TAB => {
                 let next_stop = (self.column / TAB_WIDTH + 1) * TAB_WIDTH;
                 self.column = self.columns.map_or(next_stop, |columns| {
                     next_stop.min(columns.saturating_sub(1))
                 });
             }
-            0x08 => self.column = self.column.saturating_sub(1),
+            control::BACKSPACE => self.column = self.column.saturating_sub(1),
             _ => {}
         }
     }
 
+    /// Applies a control sequence: colors and attributes, erasing, and cursor movement. Cursor
+    /// positions are kept within `MAX_LINES` and `MAX_COLUMNS`.
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
         // Private sequences such as `CSI ? 25 l` carry their marker as an intermediate and change
         // nothing a picture shows.
@@ -443,6 +520,8 @@ impl Perform for ScreenBuilder {
             }
             _ => {}
         }
+        self.row = self.row.min(MAX_LINES);
+        self.column = self.column.min(MAX_COLUMNS);
     }
 }
 
@@ -544,6 +623,13 @@ mod tests {
     fn private_sequences_and_osc_are_dropped() {
         let screen = Screen::parse(b"\x1b[?25l\x1b]0;title\x07ok\x1b[?25h", None);
         assert_eq!(text(&screen), ["ok"]);
+    }
+
+    #[test]
+    fn cursor_jumps_stay_within_the_limits() {
+        let screen = Screen::parse(b"\x1b[60000Cx\n\x1b[65000B\x1b[65000By\xcc\x81", None);
+        assert!(screen.width() <= MAX_COLUMNS);
+        assert!(screen.lines.len() <= MAX_LINES);
     }
 
     #[test]
