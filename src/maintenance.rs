@@ -67,14 +67,11 @@ pub fn print_version() {
     println!("{NAME} {}", env!("CARGO_PKG_VERSION"));
 }
 
-/// Updates shotty through Homebrew.
-///
-/// Runs `brew update` first, because Homebrew otherwise may skip refreshing the tap for up to a
-/// day and miss a new release.
+/// Updates shotty through Homebrew, as `upgrade_with` describes.
 ///
 /// # Errors
 ///
-/// Fails when shotty was not installed with Homebrew or when `brew` fails.
+/// Fails when shotty was not installed with Homebrew or when `brew upgrade` fails.
 pub fn update() -> Result<()> {
     let brew = match Installation::detect()? {
         Installation::Homebrew { brew } => brew,
@@ -85,8 +82,23 @@ pub fn update() -> Result<()> {
             )
         }
     };
-    run_brew(&brew, &["update", "--quiet"])?;
-    run_brew(&brew, &["upgrade", TAP_FORMULA])
+    upgrade_with(&brew)
+}
+
+/// Refreshes the taps and upgrades the formula with the Homebrew executable `brew`.
+///
+/// Runs `brew update` first, because Homebrew otherwise may skip refreshing the tap for up to a
+/// day and miss a new release. `brew update` also fails when any other tap is broken, while the
+/// rest are still refreshed, so its failure is reported and the upgrade goes ahead.
+///
+/// # Errors
+///
+/// Fails when `brew upgrade` fails.
+fn upgrade_with(brew: &Path) -> Result<()> {
+    if let Err(error) = run_brew(brew, &["update", "--quiet"]) {
+        eprintln!("shotty: {error:#}; upgrading with the taps Homebrew could refresh");
+    }
+    run_brew(brew, &["upgrade", TAP_FORMULA])
 }
 
 /// Removes shotty and everything it put on this computer.
@@ -214,6 +226,32 @@ mod tests {
             homebrew_prefix(Path::new("/opt/homebrew/Cellar/other/1.0/bin/shotty")),
             None
         );
+    }
+
+    #[test]
+    fn upgrade_goes_ahead_when_brew_update_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!("shotty-brew-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let log = directory.join("calls");
+        let brew = directory.join("brew");
+        // Stands in for Homebrew with a broken tap: `update` fails, everything else succeeds.
+        fs::write(
+            &brew,
+            format!(
+                "#!/bin/sh\necho \"$1\" >> '{}'\n[ \"$1\" != update ]\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&brew, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let result = upgrade_with(&brew);
+        let calls = fs::read_to_string(&log).unwrap();
+        fs::remove_dir_all(&directory).unwrap();
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(calls, "update\nupgrade\n");
     }
 
     #[test]
