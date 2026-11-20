@@ -1,5 +1,6 @@
 //! Shapes text with `cosmic-text` and draws it onto a fixed cell grid, the way a terminal does.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
@@ -27,18 +28,33 @@ const BUNDLED_FONTS: [&[u8]; 6] = [
     include_bytes!("../../assets/fonts/Inter-Bold.ttf"),
 ];
 
-/// Family name inside the bundled interface font files.
+/// Family name inside the bundled Inter files.
 pub const UI_FAMILY: &str = "Inter";
+
+/// The macOS system font, San Francisco, as every Mac installs it. It is read from the running
+/// system and never bundled, because its license does not allow passing it on.
+const MACOS_SYSTEM_FONT_PATH: &str = "/System/Library/Fonts/SFNS.ttf";
 
 /// Line height of interface text as a multiple of its size.
 const UI_LINE_HEIGHT: f32 = 1.2;
 
-/// Size and weight of interface text, such as the clock in a desktop bar.
+/// Typeface of interface text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiFont {
+    /// The macOS system font at `MACOS_SYSTEM_FONT_PATH`; Inter where it is not installed.
+    MacosSystem,
+    /// The bundled Inter.
+    Inter,
+}
+
+/// Typeface, size and weight of interface text, such as the clock in a desktop bar.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UiStyle {
+    /// Typeface.
+    pub font: UiFont,
     /// Font size in pixels.
     pub size_px: f32,
-    /// `true` sets the text in Inter Bold, `false` in Inter Regular.
+    /// `true` sets the text in the bold weight, `false` in the regular one.
     pub bold: bool,
 }
 
@@ -57,6 +73,8 @@ pub struct Typesetter {
     cache: SwashCache,
     /// Family used for all text.
     family: String,
+    /// Family of the macOS system font, `None` where it is not installed.
+    macos_system_family: Option<String>,
     /// Font size in pixels.
     font_px: f32,
     /// Distance between two baselines in pixels.
@@ -80,11 +98,13 @@ impl Typesetter {
         }
         let family = choose_family(&database, font)?;
         database.set_monospace_family(family.clone());
+        let macos_system_family = family_of_file(&database, Path::new(MACOS_SYSTEM_FONT_PATH));
 
         let mut typesetter = Self {
             font_system: FontSystem::new_with_locale_and_db(SHAPING_LOCALE.to_owned(), database),
             cache: SwashCache::new(),
             family,
+            macos_system_family,
             font_px,
             line_px,
             cell_width: 0.0,
@@ -111,6 +131,12 @@ impl Typesetter {
     pub fn draw_text(&mut self, canvas: &mut Canvas, text: &str, x: f32, y: f32, color: Rgb) {
         let buffer = self.shape_regular(text);
         self.draw_buffer(canvas, &buffer, x, y, color);
+    }
+
+    /// Whether the macOS system font is installed, so `UiFont::MacosSystem` sets text in it
+    /// rather than in Inter.
+    pub fn has_macos_system_font(&self) -> bool {
+        self.macos_system_family.is_some()
     }
 
     /// Width of `text` in pixels when set in the interface font in `style`.
@@ -237,8 +263,12 @@ impl Typesetter {
 
     /// Shapes `text` in the interface font in `style`.
     fn shape_ui(&mut self, text: &str, style: UiStyle) -> Buffer {
+        let family = match (style.font, &self.macos_system_family) {
+            (UiFont::MacosSystem, Some(family)) => family.clone(),
+            (UiFont::MacosSystem, None) | (UiFont::Inter, _) => UI_FAMILY.to_owned(),
+        };
         self.shape_with(
-            &[(text, attrs_for(UI_FAMILY, style.bold, false))],
+            &[(text, attrs_for(&family, style.bold, false))],
             Metrics::new(style.size_px, style.size_px * UI_LINE_HEIGHT),
         )
     }
@@ -316,6 +346,19 @@ fn family_of_face(database: &Database, postscript_name: &str) -> Option<String> 
     database
         .faces()
         .find(|face| face.post_script_name == postscript_name)
+        .and_then(|face| face.families.first())
+        .map(|(family, _)| family.clone())
+}
+
+/// Returns the family of the first face loaded from the font file at `path`, or `None` when no
+/// face in `database` came from it.
+fn family_of_file(database: &Database, path: &Path) -> Option<String> {
+    database
+        .faces()
+        .find(|face| match &face.source {
+            Source::File(source) | Source::SharedFile(source, _) => source == path,
+            Source::Binary(_) => false,
+        })
         .and_then(|face| face.families.first())
         .map(|(family, _)| family.clone())
 }
