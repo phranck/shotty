@@ -5,8 +5,22 @@ use anyhow::{Context, Result, bail};
 /// Number of hexadecimal digits in a `#rrggbb` color.
 const HEX_COLOR_DIGITS: usize = 6;
 
-/// Largest value of an 8 bit color channel.
-const CHANNEL_MAX: f32 = 255.0;
+/// Largest value of an 8 bit color channel, which is also full opacity.
+pub const CHANNEL_MAX: u8 = 255;
+
+/// Bytes per pixel in RGBA, whether straight or premultiplied.
+pub const RGBA_BYTES: usize = 4;
+
+/// Lays an 8 bit `source` channel with coverage `alpha` over `destination`.
+///
+/// Returns `source × alpha + destination × (255 − alpha)`, divided by `255` and rounded to the
+/// nearest integer. The same formula serves straight colors over an opaque underlay and
+/// premultiplied pixels, where the alpha channel itself is blended with a `source` of `255`.
+pub fn blend_channel(source: u8, destination: u8, alpha: u8) -> u8 {
+    let max = u32::from(CHANNEL_MAX);
+    let alpha = u32::from(alpha);
+    ((u32::from(source) * alpha + u32::from(destination) * (max - alpha) + max / 2) / max) as u8
+}
 
 /// A color in sRGB with 8 bits per channel and no alpha.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,7 +35,10 @@ pub struct Rgb {
 
 impl Rgb {
     /// Plain white, used under a JPG where the picture has no background of its own.
-    pub const WHITE: Rgb = Rgb::new(255, 255, 255);
+    pub const WHITE: Rgb = Rgb::new(CHANNEL_MAX, CHANNEL_MAX, CHANNEL_MAX);
+
+    /// Plain black, the color of the window shadow.
+    pub const BLACK: Rgb = Rgb::new(0, 0, 0);
 
     /// Creates a color from its three channels, each from `0` to `255`.
     pub const fn new(red: u8, green: u8, blue: u8) -> Self {
@@ -57,7 +74,7 @@ impl Rgb {
         let blend = |from: u8, to: u8| {
             (f32::from(from) + (f32::from(to) - f32::from(from)) * amount)
                 .round()
-                .clamp(0.0, CHANNEL_MAX) as u8
+                .clamp(0.0, f32::from(CHANNEL_MAX)) as u8
         };
         Rgb::new(
             blend(self.red, other.red),
@@ -123,10 +140,17 @@ mod tests {
 
     #[test]
     fn mixes_at_both_ends_and_between() {
-        let black = Rgb::new(0, 0, 0);
+        let black = Rgb::BLACK;
         assert_eq!(black.mix(Rgb::WHITE, 0.0), black);
         assert_eq!(black.mix(Rgb::WHITE, 1.0), Rgb::WHITE);
         assert_eq!(black.mix(Rgb::WHITE, 0.5), Rgb::new(128, 128, 128));
+    }
+
+    #[test]
+    fn blend_channel_covers_both_ends_and_rounds() {
+        assert_eq!(blend_channel(200, 10, CHANNEL_MAX), 200);
+        assert_eq!(blend_channel(200, 10, 0), 10);
+        assert_eq!(blend_channel(0, 255, 128), 127);
     }
 
     #[test]

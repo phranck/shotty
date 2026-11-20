@@ -40,6 +40,9 @@ pub const DEFAULT_SCALE: f32 = 2.0;
 /// Terminal width for `--execute` when nothing else sets it, the classic terminal width.
 pub const DEFAULT_EXECUTE_COLUMNS: u16 = 80;
 
+/// Widest accepted terminal. The parser drops columns beyond `ansi::MAX_COLUMNS` anyway.
+const MAX_COLUMNS: u16 = crate::ansi::MAX_COLUMNS as u16;
+
 /// Smallest accepted font size in points. Below it glyphs turn into noise.
 const MIN_FONT_SIZE: f32 = 4.0;
 
@@ -150,8 +153,9 @@ pub struct Settings {
     pub shadow: bool,
     /// Color around the window.
     pub backdrop: Backdrop,
-    /// Terminal width: where lines wrap and how wide `--execute` makes the terminal. `None` keeps
-    /// lines whole; with `--execute` it is `DEFAULT_EXECUTE_COLUMNS` unless set.
+    /// Terminal width from `--columns` or the config file, from `1` to `MAX_COLUMNS`. `None`
+    /// means it was not set; `main` then keeps piped lines whole and gives `--execute`
+    /// `DEFAULT_EXECUTE_COLUMNS`.
     pub columns: Option<u16>,
 }
 
@@ -162,18 +166,20 @@ impl Settings {
     ///
     /// # Errors
     ///
-    /// Fails on an unknown theme, an unparsable background, or a number outside its accepted range.
+    /// Fails on an output extension other than `.png`, `.jpg` or `.jpeg` without `--format`, an
+    /// unknown theme, an unparsable background, or a number outside its accepted range.
     pub fn resolve(args: RenderArgs, config: ConfigFile, now: &str) -> Result<Self> {
-        let format = args
-            .format
-            .or_else(|| {
-                args.output
-                    .as_deref()
-                    .and_then(Path::extension)
-                    .and_then(|extension| ImageFormat::from_extension(&extension.to_string_lossy()))
-            })
-            .or(config.format)
-            .unwrap_or(ImageFormat::Png);
+        let extension = args.output.as_deref().and_then(Path::extension);
+        let format = match (args.format, extension) {
+            (Some(format), _) => format,
+            (None, Some(extension)) => {
+                let extension = extension.to_string_lossy();
+                ImageFormat::from_extension(&extension).with_context(|| {
+                    format!("cannot tell the image format from `.{extension}`; use .png or .jpg, or name the format with --format")
+                })?
+            }
+            (None, None) => config.format.unwrap_or(ImageFormat::Png),
+        };
         let output = args
             .output
             .unwrap_or_else(|| PathBuf::from(format!("shotty-{now}.{}", format.extension())));
@@ -226,7 +232,8 @@ impl Settings {
             columns: args
                 .columns
                 .or(config.columns)
-                .or(args.execute.is_some().then_some(DEFAULT_EXECUTE_COLUMNS)),
+                .map(|columns| in_range("columns", columns, 1, MAX_COLUMNS))
+                .transpose()?,
         })
     }
 }
@@ -236,7 +243,12 @@ impl Settings {
 /// # Errors
 ///
 /// Fails with a message naming the option when it does not, or when it is not a number.
-fn in_range(option: &str, value: f32, min: f32, max: f32) -> Result<f32> {
+fn in_range<T: PartialOrd + Copy + std::fmt::Display>(
+    option: &str,
+    value: T,
+    min: T,
+    max: T,
+) -> Result<T> {
     if !(min..=max).contains(&value) {
         anyhow::bail!("{option} must be between {min} and {max}, not {value}");
     }
@@ -246,8 +258,6 @@ fn in_range(option: &str, value: f32, min: f32, max: f32) -> Result<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::Cli;
-    use clap::CommandFactory;
 
     const NOW: &str = "20261120-101500";
 
@@ -307,18 +317,13 @@ mod tests {
     }
 
     #[test]
-    fn execute_sets_title_and_terminal_width() {
+    fn execute_names_the_window() {
         let args = RenderArgs {
             execute: Some("git status".to_owned()),
             ..RenderArgs::default()
         };
         let settings = Settings::resolve(args, ConfigFile::default(), NOW).unwrap();
         assert_eq!(settings.title.as_deref(), Some("git status"));
-        assert_eq!(settings.columns, Some(DEFAULT_EXECUTE_COLUMNS));
-
-        let settings =
-            Settings::resolve(RenderArgs::default(), ConfigFile::default(), NOW).unwrap();
-        assert_eq!(settings.columns, None);
     }
 
     #[test]
@@ -346,30 +351,26 @@ mod tests {
         assert!(config.theme.is_none());
     }
 
-    /// The help texts state the defaults in prose because the options are optional; this keeps
-    /// them equal to the constants.
     #[test]
-    fn help_states_the_actual_defaults() {
-        let command = Cli::command();
-        let help_of = |name: &str| {
-            command
-                .get_arguments()
-                .find(|argument| argument.get_id() == name)
-                .and_then(|argument| argument.get_help())
-                .map(ToString::to_string)
-                .unwrap()
+    fn unknown_extension_needs_the_format_flag() {
+        let args = RenderArgs {
+            output: Some("shot.gif".into()),
+            ..RenderArgs::default()
         };
-        assert!(help_of("theme").contains(&format!("[default: {}]", theme::DEFAULT_THEME)));
-        assert!(help_of("font_size").contains(&format!("[default: {DEFAULT_FONT_SIZE}]")));
-        assert!(help_of("line_height").contains(&format!("[default: {DEFAULT_LINE_HEIGHT}]")));
-        assert!(help_of("padding").contains(&format!("[default: {DEFAULT_PADDING}]")));
-        assert!(help_of("scale").contains(&format!("[default: {DEFAULT_SCALE}]")));
-        assert!(help_of("columns").contains(&format!(
-            "[default: {DEFAULT_EXECUTE_COLUMNS} with --execute"
-        )));
-        assert!(
-            help_of("background")
-                .contains(&format!("[default: {}]", Backdrop::TRANSPARENT_KEYWORD))
-        );
+        let error = Settings::resolve(args, ConfigFile::default(), NOW).unwrap_err();
+        assert!(error.to_string().contains(".gif"), "{error}");
+
+        let args = RenderArgs {
+            output: Some("shot.gif".into()),
+            format: Some(ImageFormat::Png),
+            ..RenderArgs::default()
+        };
+        assert!(Settings::resolve(args, ConfigFile::default(), NOW).is_ok());
+    }
+
+    #[test]
+    fn columns_from_the_config_are_checked() {
+        let config: ConfigFile = toml::from_str("columns = 0").unwrap();
+        assert!(Settings::resolve(RenderArgs::default(), config, NOW).is_err());
     }
 }

@@ -1,0 +1,6 @@
+# The one Rust version used locally, in CI and for release builds. The oldest version shotty
+# supports is `rust-version` in Cargo.toml, which CI checks separately.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

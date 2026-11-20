@@ -4,7 +4,7 @@ mod canvas;
 mod text;
 mod window;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 pub use self::canvas::Canvas;
 use self::canvas::{Bounds, OPAQUE};
@@ -31,6 +31,13 @@ const MIN_DECORATION_THICKNESS: f32 = 1.0;
 
 /// Space between the title and the buttons in points.
 const TITLE_GAP: f32 = 12.0;
+
+/// Largest image shotty renders. Drawing the shadow holds about four copies of the image in
+/// memory, so this keeps the peak near 650 MB.
+const MAX_PIXELS: f64 = 40.0 * PIXELS_PER_MEGAPIXEL;
+
+/// Pixels in a megapixel, for the size limit message.
+const PIXELS_PER_MEGAPIXEL: f64 = 1_000_000.0;
 
 /// The colors a cell is drawn with after the theme and the inverse and dim attributes apply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,10 +113,14 @@ pub fn render(screen: &Screen, settings: &Settings) -> Result<Canvas> {
         height: window_height,
     };
 
-    let mut canvas = Canvas::new(
-        (window_width + 2.0 * margin) as u32,
-        (window_height + 2.0 * margin) as u32,
-    )?;
+    let (width, height) = (window_width + 2.0 * margin, window_height + 2.0 * margin);
+    if f64::from(width) * f64::from(height) > MAX_PIXELS {
+        bail!(
+            "the image would be {width}×{height} pixels, more than {} megapixels; use a smaller --scale or --font-size, or less output",
+            MAX_PIXELS / PIXELS_PER_MEGAPIXEL
+        );
+    }
+    let mut canvas = Canvas::new(width as u32, height as u32)?;
     if let Backdrop::Solid(color) = settings.backdrop {
         canvas.fill(color);
     }
@@ -335,6 +346,15 @@ mod tests {
         let canvas = render(&screen, &settings).unwrap();
         let red = settings.theme.palette[1];
         assert_eq!(canvas.pixel(3, 10), [red.red, red.green, red.blue, OPAQUE]);
+    }
+
+    #[test]
+    fn oversized_images_are_refused_before_drawing() {
+        let settings = settings(RenderArgs::default());
+        let error = render(&Screen::parse(b"x\n\x1b[60000Bx", None), &settings)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("megapixels"), "{error}");
     }
 
     #[test]
