@@ -1,0 +1,345 @@
+//! Resolves the rendering settings from the command line, the config file and the defaults, in that
+//! order of precedence.
+
+use std::env;
+use std::fs;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use serde::Deserialize;
+
+use crate::cli::{ImageFormat, RenderArgs};
+use crate::color::Backdrop;
+use crate::theme::{self, Theme};
+
+/// Directory below the config home that holds shotty's files.
+pub const APP_DIRECTORY: &str = "shotty";
+
+/// Name of the config file inside `APP_DIRECTORY`.
+const CONFIG_FILE: &str = "config.toml";
+
+/// Environment variable that moves the config home away from `~/.config`.
+const XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
+
+/// Config home below the user's home directory when `XDG_CONFIG_HOME` is not set.
+const DEFAULT_CONFIG_HOME: &str = ".config";
+
+/// Font size in points when nothing else sets it.
+pub const DEFAULT_FONT_SIZE: f32 = 14.0;
+
+/// Line height as a multiple of the font size when nothing else sets it.
+pub const DEFAULT_LINE_HEIGHT: f32 = 1.4;
+
+/// Space between the text and the window edge in points when nothing else sets it.
+pub const DEFAULT_PADDING: f32 = 20.0;
+
+/// Pixels per point when nothing else sets it. `2` matches high resolution screens.
+pub const DEFAULT_SCALE: f32 = 2.0;
+
+/// Smallest accepted font size in points. Below it glyphs turn into noise.
+const MIN_FONT_SIZE: f32 = 4.0;
+
+/// Largest accepted font size in points.
+const MAX_FONT_SIZE: f32 = 200.0;
+
+/// Smallest accepted scale.
+const MIN_SCALE: f32 = 0.5;
+
+/// Largest accepted scale. Above it even short output makes images of many megapixels.
+const MAX_SCALE: f32 = 8.0;
+
+/// Smallest accepted line height factor; below it lines overlap.
+const MIN_LINE_HEIGHT: f32 = 1.0;
+
+/// Largest accepted line height factor.
+const MAX_LINE_HEIGHT: f32 = 4.0;
+
+/// Largest accepted padding in points.
+const MAX_PADDING: f32 = 400.0;
+
+/// The keys `config.toml` accepts, named like the long command line options.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ConfigFile {
+    /// Image format used when the output path does not decide it.
+    pub format: Option<ImageFormat>,
+    /// Name of a bundled theme.
+    pub theme: Option<String>,
+    /// Installed font family.
+    pub font: Option<String>,
+    /// Font size in points.
+    pub font_size: Option<f32>,
+    /// Line height as a multiple of the font size.
+    pub line_height: Option<f32>,
+    /// Space between text and window edge in points.
+    pub padding: Option<f32>,
+    /// Pixels per point.
+    pub scale: Option<f32>,
+    /// `false` leaves out the window frame, like `--no-window`.
+    pub window: Option<bool>,
+    /// `false` leaves out the shadow, like `--no-shadow`.
+    pub shadow: Option<bool>,
+    /// `transparent` or `#rrggbb`.
+    pub background: Option<String>,
+}
+
+impl ConfigFile {
+    /// Path of the config file: `$XDG_CONFIG_HOME/shotty/config.toml`, or
+    /// `~/.config/shotty/config.toml` when that variable is unset or empty. `None` when neither
+    /// the variable nor a home directory is available.
+    pub fn path() -> Option<PathBuf> {
+        config_directory().map(|directory| directory.join(CONFIG_FILE))
+    }
+
+    /// Reads the config file. A missing file is an empty config.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the file exists but cannot be read or is not valid for these keys.
+    pub fn load(path: &Path) -> Result<Self> {
+        match fs::read_to_string(path) {
+            Ok(source) => toml::from_str(&source)
+                .with_context(|| format!("invalid config file {}", path.display())),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(Self::default()),
+            Err(error) => {
+                Err(error).with_context(|| format!("cannot read config file {}", path.display()))
+            }
+        }
+    }
+}
+
+/// Directory that holds shotty's config, as described at `ConfigFile::path`.
+pub fn config_directory() -> Option<PathBuf> {
+    let home = env::var_os(XDG_CONFIG_HOME)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::home_dir().map(|home| home.join(DEFAULT_CONFIG_HOME)))?;
+    Some(home.join(APP_DIRECTORY))
+}
+
+/// Everything the renderer needs, with every value decided.
+#[derive(Clone, Debug)]
+pub struct Settings {
+    /// Where the image goes.
+    pub output: PathBuf,
+    /// Format of the image.
+    pub format: ImageFormat,
+    /// Colors.
+    pub theme: Theme,
+    /// Installed font family; `None` uses the bundled font.
+    pub font: Option<String>,
+    /// Font size in points.
+    pub font_size: f32,
+    /// Line height as a multiple of the font size.
+    pub line_height: f32,
+    /// Space between text and window edge in points.
+    pub padding: f32,
+    /// Pixels per point.
+    pub scale: f32,
+    /// Title bar text; `None` leaves the title bar empty.
+    pub title: Option<String>,
+    /// Whether the window frame is drawn.
+    pub window: bool,
+    /// Whether the window casts a shadow. Only has an effect with `window`.
+    pub shadow: bool,
+    /// Color around the window.
+    pub backdrop: Backdrop,
+}
+
+impl Settings {
+    /// Combines the command line and the config file, falling back to the defaults.
+    ///
+    /// `now` names the file when no output path is given, as `shotty-<now>.<extension>`.
+    ///
+    /// # Errors
+    ///
+    /// Fails on an unknown theme, an unparsable background, or a number outside its accepted range.
+    pub fn resolve(args: RenderArgs, config: ConfigFile, now: &str) -> Result<Self> {
+        let format = args
+            .format
+            .or_else(|| {
+                args.output
+                    .as_deref()
+                    .and_then(Path::extension)
+                    .and_then(|extension| ImageFormat::from_extension(&extension.to_string_lossy()))
+            })
+            .or(config.format)
+            .unwrap_or(ImageFormat::Png);
+        let output = args
+            .output
+            .unwrap_or_else(|| PathBuf::from(format!("shotty-{now}.{}", format.extension())));
+        let theme_name = args
+            .theme
+            .or(config.theme)
+            .unwrap_or_else(|| theme::DEFAULT_THEME.to_owned());
+        let backdrop = match args.background.or(config.background) {
+            Some(text) => Backdrop::parse(&text)?,
+            None => Backdrop::Transparent,
+        };
+
+        Ok(Self {
+            output,
+            format,
+            theme: Theme::bundled(&theme_name)?,
+            font: args.font.or(config.font),
+            font_size: in_range(
+                "font-size",
+                args.font_size
+                    .or(config.font_size)
+                    .unwrap_or(DEFAULT_FONT_SIZE),
+                MIN_FONT_SIZE,
+                MAX_FONT_SIZE,
+            )?,
+            line_height: in_range(
+                "line-height",
+                args.line_height
+                    .or(config.line_height)
+                    .unwrap_or(DEFAULT_LINE_HEIGHT),
+                MIN_LINE_HEIGHT,
+                MAX_LINE_HEIGHT,
+            )?,
+            padding: in_range(
+                "padding",
+                args.padding.or(config.padding).unwrap_or(DEFAULT_PADDING),
+                0.0,
+                MAX_PADDING,
+            )?,
+            scale: in_range(
+                "scale",
+                args.scale.or(config.scale).unwrap_or(DEFAULT_SCALE),
+                MIN_SCALE,
+                MAX_SCALE,
+            )?,
+            title: args.title,
+            window: !args.no_window && config.window.unwrap_or(true),
+            shadow: !args.no_shadow && config.shadow.unwrap_or(true),
+            backdrop,
+        })
+    }
+}
+
+/// Checks that `value` lies within `min..=max`.
+///
+/// # Errors
+///
+/// Fails with a message naming the option when it does not, or when it is not a number.
+fn in_range(option: &str, value: f32, min: f32, max: f32) -> Result<f32> {
+    if !(min..=max).contains(&value) {
+        anyhow::bail!("{option} must be between {min} and {max}, not {value}");
+    }
+    Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::Cli;
+    use clap::CommandFactory;
+
+    const NOW: &str = "20261120-101500";
+
+    #[test]
+    fn defaults_apply_without_flags_or_config() {
+        let settings =
+            Settings::resolve(RenderArgs::default(), ConfigFile::default(), NOW).unwrap();
+        assert_eq!(settings.output, PathBuf::from("shotty-20261120-101500.png"));
+        assert_eq!(settings.format, ImageFormat::Png);
+        assert_eq!(settings.font_size, DEFAULT_FONT_SIZE);
+        assert!(settings.window && settings.shadow);
+        assert_eq!(settings.backdrop, Backdrop::Transparent);
+    }
+
+    #[test]
+    fn flags_win_over_config_and_config_over_defaults() {
+        let args = RenderArgs {
+            font_size: Some(20.0),
+            ..RenderArgs::default()
+        };
+        let config: ConfigFile =
+            toml::from_str("font-size = 16\npadding = 8\nwindow = false\ntheme = \"nord\"")
+                .unwrap();
+        let settings = Settings::resolve(args, config, NOW).unwrap();
+        assert_eq!(settings.font_size, 20.0);
+        assert_eq!(settings.padding, 8.0);
+        assert!(!settings.window);
+        assert_eq!(settings.theme, Theme::bundled("nord").unwrap());
+    }
+
+    #[test]
+    fn output_extension_picks_the_format() {
+        let args = RenderArgs {
+            output: Some("shot.JPEG".into()),
+            ..RenderArgs::default()
+        };
+        assert_eq!(
+            Settings::resolve(args, ConfigFile::default(), NOW)
+                .unwrap()
+                .format,
+            ImageFormat::Jpg
+        );
+    }
+
+    #[test]
+    fn format_flag_names_the_default_file() {
+        let args = RenderArgs {
+            format: Some(ImageFormat::Jpg),
+            ..RenderArgs::default()
+        };
+        assert_eq!(
+            Settings::resolve(args, ConfigFile::default(), NOW)
+                .unwrap()
+                .output,
+            PathBuf::from("shotty-20261120-101500.jpg")
+        );
+    }
+
+    #[test]
+    fn unknown_config_key_is_an_error() {
+        assert!(toml::from_str::<ConfigFile>("colour = \"red\"").is_err());
+    }
+
+    #[test]
+    fn out_of_range_numbers_are_errors() {
+        let args = RenderArgs {
+            scale: Some(100.0),
+            ..RenderArgs::default()
+        };
+        assert!(Settings::resolve(args, ConfigFile::default(), NOW).is_err());
+        let args = RenderArgs {
+            font_size: Some(f32::NAN),
+            ..RenderArgs::default()
+        };
+        assert!(Settings::resolve(args, ConfigFile::default(), NOW).is_err());
+    }
+
+    #[test]
+    fn missing_config_file_is_empty() {
+        let config = ConfigFile::load(Path::new("/nonexistent/shotty/config.toml")).unwrap();
+        assert!(config.theme.is_none());
+    }
+
+    /// The help texts state the defaults in prose because the options are optional; this keeps
+    /// them equal to the constants.
+    #[test]
+    fn help_states_the_actual_defaults() {
+        let command = Cli::command();
+        let help_of = |name: &str| {
+            command
+                .get_arguments()
+                .find(|argument| argument.get_id() == name)
+                .and_then(|argument| argument.get_help())
+                .map(ToString::to_string)
+                .unwrap()
+        };
+        assert!(help_of("theme").contains(&format!("[default: {}]", theme::DEFAULT_THEME)));
+        assert!(help_of("font_size").contains(&format!("[default: {DEFAULT_FONT_SIZE}]")));
+        assert!(help_of("line_height").contains(&format!("[default: {DEFAULT_LINE_HEIGHT}]")));
+        assert!(help_of("padding").contains(&format!("[default: {DEFAULT_PADDING}]")));
+        assert!(help_of("scale").contains(&format!("[default: {DEFAULT_SCALE}]")));
+        assert!(
+            help_of("background")
+                .contains(&format!("[default: {}]", Backdrop::TRANSPARENT_KEYWORD))
+        );
+    }
+}
