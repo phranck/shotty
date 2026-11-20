@@ -61,10 +61,13 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "shotty ${GITHUB_REF_NAME#v}" --notes-file notes.md dist/*
       - name: Publish once every archive is attached
         run: |
-          expected=$(find dist -type f | wc -l)
+          # This job runs only when every build job succeeded, and each left one archive and its
+          # checksum, so the release must hold exactly the files that arrived here.
+          archives=$(find dist -name '*.tar.gz' | wc -l)
+          checksums=$(find dist -name '*.tar.gz.sha256' | wc -l)
           attached=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')
-          if [ "$attached" -ne "$expected" ] || [ "$expected" -ne 8 ]; then
-            echo "expected 8 assets, built $expected, attached $attached" >&2
+          if [ "$archives" -eq 0 ] || [ "$archives" -ne "$checksums" ] || [ "$attached" -ne $((archives + checksums)) ]; then
+            echo "built $archives archives and $checksums checksums, attached $attached" >&2
             exit 1
           fi
           gh release edit "$GITHUB_REF_NAME" --draft=false
@@ -87,7 +90,8 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           scripts/formula.sh "$version" dist > shotty.rb
           path=repos/phranck/homebrew-tap/contents/shotty.rb
-          sha=$(gh api "$path" --jq .sha 2>/dev/null || true)
+          # A missing file answers 404 with a JSON body on stdout, so only a successful lookup counts.
+          sha=$(gh api "$path" --jq .sha 2>/dev/null) || sha=""
           gh api --method PUT "$path" \
             -f message="Chore: shotty $version" \
             -f content="$(base64 -w0 shotty.rb)" \

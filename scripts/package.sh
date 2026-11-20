@@ -4,8 +4,11 @@
 # Usage: scripts/package.sh <version> <target>
 #
 # The archive holds one directory with the binary, the man pages, the license and the README.
-# Run it from the repository root after `cargo build --release --locked --target <target>`.
+# Run it after `cargo build --release --locked --target <target>`.
 set -euo pipefail
+
+# Every path below is relative to the repository root, wherever the script is called from.
+cd "$(dirname "$0")/.."
 
 if [[ $# -ne 2 ]]; then
   echo "usage: $0 <version> <target>" >&2
