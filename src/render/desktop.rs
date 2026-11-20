@@ -7,7 +7,7 @@ use jiff::civil::DateTime;
 
 use super::Insets;
 use super::canvas::{Bounds, Canvas, OPAQUE};
-use super::text::{Typesetter, UiStyle};
+use super::text::{Typesetter, UiFont, UiStyle};
 use crate::cli::Desktop;
 use crate::color::Rgb;
 
@@ -38,8 +38,14 @@ const MENU_BAR_ALPHA: u8 = 70;
 /// App name and menus of the macOS menu bar, left to right; the first one is set in bold.
 const MENUS: [&str; 6] = ["Terminal", "Shell", "Edit", "View", "Window", "Help"];
 
-/// Clock format of the macOS menu bar, for example `Fri Nov 20 13:42`.
-const MACOS_CLOCK_FORMAT: &str = "%a %b %d %H:%M";
+/// The Apple logo, which the macOS system font holds at this private use code point.
+const APPLE_LOGO: &str = "\u{F8FF}";
+
+/// Size of the Apple logo in the macOS menu bar.
+const APPLE_LOGO_SIZE: f32 = 15.0;
+
+/// Clock text of the macOS menu bar, the time Apple shows in its own product pictures.
+const MACOS_CLOCK_TEXT: &str = "9:41";
 
 /// Height of the GNOME top bar.
 const GNOME_BAR_HEIGHT: f32 = 32.0;
@@ -158,12 +164,12 @@ pub fn min_width(
     let clock = typesetter.measure_ui(&clock(desktop, time), clock_style(desktop, scale));
     let left = match desktop {
         Desktop::Macos => {
-            MENUS
+            let items = menu_items(typesetter.has_macos_system_font(), scale);
+            items
                 .iter()
-                .enumerate()
-                .map(|(index, menu)| typesetter.measure_ui(menu, menu_style(index, scale)))
+                .map(|&(text, style)| typesetter.measure_ui(text, style))
                 .sum::<f32>()
-                + MENU_GAP * scale * (MENUS.len() - 1) as f32
+                + MENU_GAP * scale * (items.len() - 1) as f32
         }
         Desktop::Linux => workspaces_width() * scale,
     };
@@ -171,22 +177,43 @@ pub fn min_width(
     2.0 * (BAR_INSET * scale + left + MENU_GAP * scale) + clock
 }
 
-/// Style of the menu at `index` in the macOS menu bar: the app name in bold, the menus regular.
-fn menu_style(index: usize, scale: f32) -> UiStyle {
-    UiStyle {
-        size_px: MENU_TEXT_SIZE * scale,
-        bold: index == 0,
-    }
+/// Items on the left of the macOS menu bar with their styles, left to right: the Apple logo when
+/// `with_logo` is `true`, then the app name in bold and the menus.
+///
+/// Only the macOS system font has the logo, so the caller passes `true` only where it is
+/// installed.
+fn menu_items(with_logo: bool, scale: f32) -> Vec<(&'static str, UiStyle)> {
+    let logo = with_logo.then_some((
+        APPLE_LOGO,
+        UiStyle {
+            font: UiFont::MacosSystem,
+            size_px: APPLE_LOGO_SIZE * scale,
+            bold: false,
+        },
+    ));
+    let menus = MENUS.iter().enumerate().map(|(index, menu)| {
+        (
+            *menu,
+            UiStyle {
+                font: UiFont::MacosSystem,
+                size_px: MENU_TEXT_SIZE * scale,
+                bold: index == 0,
+            },
+        )
+    });
+    logo.into_iter().chain(menus).collect()
 }
 
-/// Style of the clock of `desktop`: regular on macOS, bold on GNOME.
+/// Style of the clock of `desktop`: the macOS system font in regular, or Inter in bold on GNOME.
 fn clock_style(desktop: Desktop, scale: f32) -> UiStyle {
     match desktop {
         Desktop::Macos => UiStyle {
+            font: UiFont::MacosSystem,
             size_px: MENU_TEXT_SIZE * scale,
             bold: false,
         },
         Desktop::Linux => UiStyle {
+            font: UiFont::Inter,
             size_px: GNOME_TEXT_SIZE * scale,
             bold: true,
         },
@@ -220,13 +247,12 @@ fn bar_height(desktop: Desktop) -> f32 {
     }
 }
 
-/// The clock text of `desktop` for `time`.
+/// The clock text of `desktop`: always `MACOS_CLOCK_TEXT` on macOS, and `time` on GNOME.
 fn clock(desktop: Desktop, time: &DateTime) -> String {
-    let format = match desktop {
-        Desktop::Macos => MACOS_CLOCK_FORMAT,
-        Desktop::Linux => GNOME_CLOCK_FORMAT,
-    };
-    time.strftime(format).to_string()
+    match desktop {
+        Desktop::Macos => MACOS_CLOCK_TEXT.to_owned(),
+        Desktop::Linux => time.strftime(GNOME_CLOCK_FORMAT).to_string(),
+    }
 }
 
 /// Width of the GNOME workspace indicator in points.
@@ -264,10 +290,9 @@ fn draw_menu_bar(canvas: &mut Canvas, typesetter: &mut Typesetter, time: &DateTi
     );
     let center = height / 2.0;
     let mut x = BAR_INSET * scale;
-    for (index, menu) in MENUS.iter().enumerate() {
-        let style = menu_style(index, scale);
-        typesetter.draw_ui_text(canvas, menu, x, center, style, Rgb::WHITE);
-        x += typesetter.measure_ui(menu, style) + MENU_GAP * scale;
+    for (text, style) in menu_items(typesetter.has_macos_system_font(), scale) {
+        typesetter.draw_ui_text(canvas, text, x, center, style, Rgb::WHITE);
+        x += typesetter.measure_ui(text, style) + MENU_GAP * scale;
     }
     let style = clock_style(Desktop::Macos, scale);
     let clock = clock(Desktop::Macos, time);
@@ -324,8 +349,17 @@ mod tests {
 
     #[test]
     fn clocks_follow_each_desktop() {
-        assert_eq!(clock(Desktop::Macos, &TIME), "Fri Nov 20 13:42");
+        assert_eq!(clock(Desktop::Macos, &TIME), "9:41");
         assert_eq!(clock(Desktop::Linux, &TIME), "Nov 20 13:42");
+    }
+
+    #[test]
+    fn apple_logo_comes_first_only_with_the_system_font() {
+        assert_eq!(menu_items(true, 1.0)[0].0, APPLE_LOGO);
+        assert_eq!(menu_items(true, 1.0).len(), MENUS.len() + 1);
+        let without = menu_items(false, 1.0);
+        assert_eq!(without[0].0, MENUS[0]);
+        assert!(without[0].1.bold);
     }
 
     #[test]
