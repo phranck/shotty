@@ -11,6 +11,7 @@ use cosmic_text::{
 use super::canvas::Canvas;
 use crate::ansi::Screen;
 use crate::color::Rgb;
+use crate::settings::FontChoice;
 
 /// Family name inside the bundled font files.
 pub const BUNDLED_FAMILY: &str = "JetBrains Mono NL";
@@ -47,24 +48,19 @@ pub struct Typesetter {
 }
 
 impl Typesetter {
-    /// Loads the fonts and measures the cell width.
-    ///
-    /// `family` names an installed font family, `None` selects the bundled font. Sizes are in
+    /// Loads the fonts, picks the family `font` asks for and measures the cell width. Sizes are in
     /// pixels.
     ///
     /// # Errors
     ///
-    /// Fails when `family` is not installed.
-    pub fn new(family: Option<&str>, font_px: f32, line_px: f32) -> Result<Self> {
+    /// Fails when `font` names a family with `--font` or the config file that is not installed.
+    pub fn new(font: &FontChoice, font_px: f32, line_px: f32) -> Result<Self> {
         let mut database = Database::new();
         database.load_system_fonts();
         for font in BUNDLED_FONTS {
             database.load_font_source(Source::Binary(Arc::new(font)));
         }
-        let family = match family {
-            None => BUNDLED_FAMILY.to_owned(),
-            Some(requested) => installed_family(&database, requested)?,
-        };
+        let family = choose_family(&database, font)?;
         database.set_monospace_family(family.clone());
 
         let mut typesetter = Self {
@@ -236,6 +232,35 @@ fn draw_glyph(
     });
 }
 
+/// Decides the family for `font` among the fonts in `database`.
+///
+/// A terminal font that is not installed, as over SSH, falls back to the bundled font with a
+/// note on standard error, because the user did not ask for it by name.
+///
+/// # Errors
+///
+/// Fails when `font` is a `FontChoice::Family` that is not installed.
+fn choose_family(database: &Database, font: &FontChoice) -> Result<String> {
+    match font {
+        FontChoice::Bundled => Ok(BUNDLED_FAMILY.to_owned()),
+        FontChoice::Family(requested) => installed_family(database, requested),
+        FontChoice::Terminal(postscript_name) => Ok(family_of_face(database, postscript_name).unwrap_or_else(|| {
+            eprintln!("shotty: the terminal's font {postscript_name} is not installed here, so {BUNDLED_FAMILY} is used");
+            BUNDLED_FAMILY.to_owned()
+        })),
+    }
+}
+
+/// Returns the family of the face whose PostScript name is `postscript_name`, or `None` when no
+/// installed face has it.
+fn family_of_face(database: &Database, postscript_name: &str) -> Option<String> {
+    database
+        .faces()
+        .find(|face| face.post_script_name == postscript_name)
+        .and_then(|face| face.families.first())
+        .map(|(family, _)| family.clone())
+}
+
 /// Finds the installed family whose name matches `requested`, ignoring case.
 ///
 /// # Errors
@@ -257,14 +282,22 @@ fn installed_family(database: &Database, requested: &str) -> Result<String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn bundled_font_is_found_by_its_family_name() {
+    /// PostScript name of the bundled regular face.
+    const BUNDLED_REGULAR_FACE: &str = "JetBrainsMonoNL-Regular";
+
+    /// A database holding only the bundled fonts, so the result does not depend on the machine.
+    fn bundled_database() -> Database {
         let mut database = Database::new();
         for font in BUNDLED_FONTS {
             database.load_font_source(Source::Binary(Arc::new(font)));
         }
+        database
+    }
+
+    #[test]
+    fn bundled_font_is_found_by_its_family_name() {
         assert_eq!(
-            installed_family(&database, &BUNDLED_FAMILY.to_lowercase()).unwrap(),
+            installed_family(&bundled_database(), &BUNDLED_FAMILY.to_lowercase()).unwrap(),
             BUNDLED_FAMILY
         );
     }
@@ -272,6 +305,31 @@ mod tests {
     #[test]
     fn unknown_family_is_an_error() {
         assert!(installed_family(&Database::new(), "No Such Font").is_err());
+        assert!(
+            choose_family(
+                &Database::new(),
+                &FontChoice::Family("No Such Font".to_owned())
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn terminal_font_maps_its_postscript_name_to_the_family() {
+        let font = FontChoice::Terminal(BUNDLED_REGULAR_FACE.to_owned());
+        assert_eq!(
+            choose_family(&bundled_database(), &font).unwrap(),
+            BUNDLED_FAMILY
+        );
+    }
+
+    #[test]
+    fn missing_terminal_font_falls_back_to_the_bundled_one() {
+        let font = FontChoice::Terminal("NotInstalled-Regular".to_owned());
+        assert_eq!(
+            choose_family(&Database::new(), &font).unwrap(),
+            BUNDLED_FAMILY
+        );
     }
 
     #[test]
@@ -279,7 +337,7 @@ mod tests {
         const FONT_PX: f32 = 20.0;
         // JetBrains Mono advances 600 of 1000 units per em.
         const EXPECTED_ADVANCE: f32 = 0.6 * FONT_PX;
-        let typesetter = Typesetter::new(None, FONT_PX, FONT_PX * 1.4).unwrap();
+        let typesetter = Typesetter::new(&FontChoice::Bundled, FONT_PX, FONT_PX * 1.4).unwrap();
         assert!(
             (typesetter.cell_width() - EXPECTED_ADVANCE).abs() < 0.01,
             "{}",

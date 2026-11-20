@@ -35,12 +35,14 @@ impl Drop for Scratch {
 }
 
 /// Runs shotty in `directory` with `input` on standard input. The config home points into
-/// `directory`, so a config file on the machine running the tests has no effect.
+/// `directory` and the terminal variables are removed, so neither a config file nor the terminal
+/// font of the machine running the tests has an effect.
 fn run(directory: &Path, args: &[&str], input: &[u8]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_shotty"))
         .args(args)
         .current_dir(directory)
         .env("XDG_CONFIG_HOME", directory.join("config"))
+        .env_remove("TERM_PROGRAM")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
