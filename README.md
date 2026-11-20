@@ -60,7 +60,7 @@ Without `-o`, the image is called `shotty-<date>-<time>.png` and lands in the cu
 
 shotty uses the font and font size of the terminal it runs in, so the picture looks like that terminal. It reads them from iTerm2 and Terminal.app. In other terminals, or when the terminal's font is not installed, it uses the bundled JetBrains Mono at 14 points.
 
-`--desktop macos` places the window on a drawn macOS desktop with a menu bar, and `--desktop linux` on a GNOME desktop with its top bar. The clock in the bar shows the time of the screenshot.
+`--desktop macos` places the window on a drawn macOS desktop with a menu bar, and `--desktop linux` on a GNOME desktop with its top bar, where the window gets a GNOME header bar with a round close button. The clock in the bar shows the time of the screenshot.
 
 `shotty --help` and `man shotty` describe every option with its default and list the bundled themes.
 
