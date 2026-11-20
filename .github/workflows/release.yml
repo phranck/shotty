@@ -88,6 +88,10 @@ jobs:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set, so shotty.rb was not updated; run scripts/formula.sh $version with the release's .sha256 files and commit the result to phranck/homebrew-tap"
+            exit 0
+          fi
           scripts/formula.sh "$version" dist > shotty.rb
           path=repos/phranck/homebrew-tap/contents/shotty.rb
           # A missing file answers 404 with a JSON body on stdout, so only a successful lookup counts.
