@@ -10,6 +10,7 @@ use anyhow::{Result, bail};
 pub use self::canvas::Canvas;
 use self::canvas::{Bounds, OPAQUE};
 use self::text::Typesetter;
+use self::window::WindowStyle;
 use crate::ansi::{Screen, Style, TermColor};
 use crate::color::{Backdrop, Rgb};
 use crate::settings::Settings;
@@ -108,6 +109,7 @@ pub fn render(screen: &Screen, settings: &Settings) -> Result<Canvas> {
         .as_deref()
         .map_or(0.0, |title| typesetter.measure(title));
 
+    let style = WindowStyle::for_desktop(settings.desktop);
     let title_bar = if settings.window {
         window::TITLE_BAR_HEIGHT * scale
     } else {
@@ -125,7 +127,8 @@ pub fn render(screen: &Screen, settings: &Settings) -> Result<Canvas> {
         } else {
             0.0
         };
-        window_width = window_width.max(window::title_bar_reserved_width() * scale + title_space);
+        window_width =
+            window_width.max(window::title_bar_reserved_width(style) * scale + title_space);
     }
     let window_width = window_width.ceil();
     let window_height = (title_bar + text_height + 2.0 * padding).ceil();
@@ -159,7 +162,7 @@ pub fn render(screen: &Screen, settings: &Settings) -> Result<Canvas> {
         if settings.shadow {
             window::draw_shadow(&mut canvas, frame, scale);
         }
-        window::draw_frame(&mut canvas, frame, theme, scale);
+        window::draw_frame(&mut canvas, frame, theme, style, scale);
         if let Some(title) = settings.title.as_deref() {
             let title_x = frame.x + (frame.width - title_width) / 2.0;
             let title_y = frame.y + (title_bar - line_px) / 2.0;
@@ -403,7 +406,10 @@ mod tests {
         });
         let canvas = render(&Screen::parse(b"x", None), &settings).unwrap();
         assert_eq!(canvas.pixel(0, 0)[3], 0);
-        assert!(canvas.width() as f32 >= window::title_bar_reserved_width() + 2.0 * window::MARGIN);
+        assert!(
+            canvas.width() as f32
+                >= window::title_bar_reserved_width(WindowStyle::Macos) + 2.0 * window::MARGIN
+        );
     }
 
     #[test]

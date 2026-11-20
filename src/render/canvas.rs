@@ -2,8 +2,8 @@
 
 use anyhow::{Result, anyhow};
 use tiny_skia::{
-    Color, FillRule, GradientStop, LinearGradient, Paint, Path, PathBuilder, Pixmap, Point,
-    RadialGradient, Rect, Shader, SpreadMode, Transform,
+    Color, FillRule, GradientStop, LineCap, LinearGradient, Paint, Path, PathBuilder, Pixmap,
+    Point, RadialGradient, Rect, Shader, SpreadMode, Stroke, Transform,
 };
 
 use crate::color::{CHANNEL_MAX, RGBA_BYTES, Rgb, blend_channel};
@@ -119,6 +119,35 @@ impl Canvas {
                 None,
             );
         }
+    }
+
+    /// Draws a straight line from `start` to `end`, `width` pixels thick with round ends.
+    pub fn stroke_line(
+        &mut self,
+        start: (f32, f32),
+        end: (f32, f32),
+        width: f32,
+        color: Rgb,
+        alpha: u8,
+    ) {
+        let mut builder = PathBuilder::new();
+        builder.move_to(start.0, start.1);
+        builder.line_to(end.0, end.1);
+        let Some(path) = builder.finish() else {
+            return;
+        };
+        let stroke = Stroke {
+            width,
+            line_cap: LineCap::Round,
+            ..Stroke::default()
+        };
+        self.pixmap.stroke_path(
+            &path,
+            &paint(color, alpha),
+            &stroke,
+            Transform::identity(),
+            None,
+        );
     }
 
     /// Fills the whole canvas with a linear gradient running from `start` to `end`.
