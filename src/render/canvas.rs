@@ -1,7 +1,10 @@
 //! A pixel surface with the few drawing operations the renderer needs.
 
 use anyhow::{Result, anyhow};
-use tiny_skia::{FillRule, Paint, Path, PathBuilder, Pixmap, Rect, Transform};
+use tiny_skia::{
+    Color, FillRule, GradientStop, LinearGradient, Paint, Path, PathBuilder, Pixmap, Point,
+    RadialGradient, Rect, Shader, SpreadMode, Transform,
+};
 
 use crate::color::{CHANNEL_MAX, RGBA_BYTES, Rgb, blend_channel};
 
@@ -74,12 +77,7 @@ impl Canvas {
 
     /// Fills the whole canvas with an opaque color.
     pub fn fill(&mut self, color: Rgb) {
-        self.pixmap.fill(tiny_skia::Color::from_rgba8(
-            color.red,
-            color.green,
-            color.blue,
-            OPAQUE,
-        ));
+        self.pixmap.fill(skia_color(color, OPAQUE));
     }
 
     /// Fills an axis aligned rectangle. Nothing happens for an empty rectangle.
@@ -121,6 +119,65 @@ impl Canvas {
                 None,
             );
         }
+    }
+
+    /// Fills the whole canvas with a linear gradient running from `start` to `end`.
+    ///
+    /// `stops` are positions from `0.0` at `start` to `1.0` at `end` with their opaque colors.
+    /// Nothing happens when `start` equals `end` or `stops` is empty.
+    pub fn fill_linear_gradient(
+        &mut self,
+        start: (f32, f32),
+        end: (f32, f32),
+        stops: &[(f32, Rgb)],
+    ) {
+        let stops = stops
+            .iter()
+            .map(|&(position, color)| GradientStop::new(position, skia_color(color, OPAQUE)))
+            .collect();
+        let shader = LinearGradient::new(
+            Point::from_xy(start.0, start.1),
+            Point::from_xy(end.0, end.1),
+            stops,
+            SpreadMode::Pad,
+            Transform::identity(),
+        );
+        self.fill_with(shader);
+    }
+
+    /// Lays a soft glow of `color` over the canvas: `alpha` at `center`, fading to nothing at
+    /// `radius`.
+    pub fn fill_glow(&mut self, center: (f32, f32), radius: f32, color: Rgb, alpha: u8) {
+        let center = Point::from_xy(center.0, center.1);
+        let stops = vec![
+            GradientStop::new(0.0, skia_color(color, alpha)),
+            GradientStop::new(1.0, skia_color(color, 0)),
+        ];
+        self.fill_with(RadialGradient::new(
+            center,
+            0.0,
+            center,
+            radius,
+            stops,
+            SpreadMode::Pad,
+            Transform::identity(),
+        ));
+    }
+
+    /// Fills the whole canvas with `shader`, drawn over what is there. `None` draws nothing.
+    fn fill_with(&mut self, shader: Option<Shader<'static>>) {
+        let Some(shader) = shader else { return };
+        let Some(rect) = Rect::from_xywh(0.0, 0.0, self.width() as f32, self.height() as f32)
+        else {
+            return;
+        };
+        let paint = Paint {
+            shader,
+            anti_alias: true,
+            ..Paint::default()
+        };
+        self.pixmap
+            .fill_rect(rect, &paint, Transform::identity(), None);
     }
 
     /// Draws one pixel of `color` with straight `alpha` over what is there. Pixels outside the
@@ -182,9 +239,14 @@ impl Canvas {
 /// A solid paint with anti aliasing.
 fn paint(color: Rgb, alpha: u8) -> Paint<'static> {
     let mut paint = Paint::default();
-    paint.set_color_rgba8(color.red, color.green, color.blue, alpha);
+    paint.set_color(skia_color(color, alpha));
     paint.anti_alias = true;
     paint
+}
+
+/// `color` with straight `alpha` as `tiny_skia` takes it.
+fn skia_color(color: Rgb, alpha: u8) -> Color {
+    Color::from_rgba8(color.red, color.green, color.blue, alpha)
 }
 
 /// Builds the outline of a rectangle with circular corners.

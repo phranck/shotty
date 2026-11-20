@@ -54,10 +54,13 @@ Without `-o`, the image is called `shotty-<date>-<time>.png` and lands in the cu
 | `--title <TEXT>` | Text in the title bar |
 | `--no-window`, `--no-shadow` | Leave out the window frame or its shadow |
 | `--background <COLOR>` | Color around the window, `transparent` or `#rrggbb` |
+| `--desktop <macos\|linux>` | Put a desktop with wallpaper and top bar behind the window |
 | `--font <FAMILY>`, `--font-size <POINTS>` | Font and size, the terminal's by default; `--font bundled` picks the bundled JetBrains Mono |
 | `--line-height`, `--padding`, `--scale` | Spacing and resolution |
 
 shotty uses the font and font size of the terminal it runs in, so the picture looks like that terminal. It reads them from iTerm2 and Terminal.app. In other terminals, or when the terminal's font is not installed, it uses the bundled JetBrains Mono at 14 points.
+
+`--desktop macos` places the window on a drawn macOS desktop with a menu bar, and `--desktop linux` on a GNOME desktop with its top bar. The clock in the bar shows the time of the screenshot.
 
 `shotty --help` and `man shotty` describe every option with its default and list the bundled themes.
 
@@ -83,7 +86,7 @@ shotty uninstall
 
 ## Credits
 
-shotty bundles [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) under the SIL Open Font License. Its themes come from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) under the MIT license.
+shotty bundles [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) and [Inter](https://github.com/rsms/inter) under the SIL Open Font License. Its themes come from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) under the MIT license.
 
 ## License
 

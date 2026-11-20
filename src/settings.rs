@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use crate::cli::{ImageFormat, RenderArgs};
+use jiff::civil::DateTime;
+
+use crate::cli::{Desktop, ImageFormat, RenderArgs};
 use crate::color::Backdrop;
 use crate::terminal_font::TerminalFont;
 use crate::theme::{self, Theme};
@@ -25,6 +27,9 @@ const XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 
 /// Config home below the user's home directory when `XDG_CONFIG_HOME` is not set.
 const DEFAULT_CONFIG_HOME: &str = ".config";
+
+/// Timestamp format in default output file names, for example `20261120-101500`.
+const FILE_TIMESTAMP_FORMAT: &str = "%Y%m%d-%H%M%S";
 
 /// Font size in points when nothing else sets it.
 pub const DEFAULT_FONT_SIZE: f32 = 14.0;
@@ -95,6 +100,8 @@ pub struct ConfigFile {
     pub background: Option<String>,
     /// Terminal width in columns.
     pub columns: Option<u16>,
+    /// `macos` or `linux`, like `--desktop`.
+    pub desktop: Option<Desktop>,
 }
 
 impl ConfigFile {
@@ -170,8 +177,12 @@ pub struct Settings {
     pub window: bool,
     /// Whether the window casts a shadow. Only has an effect with `window`.
     pub shadow: bool,
-    /// Color around the window.
+    /// Color around the window. A desktop takes its place.
     pub backdrop: Backdrop,
+    /// Desktop behind the window; `None` leaves the backdrop.
+    pub desktop: Option<Desktop>,
+    /// Local time when shotty started, shown by the desktop's clock.
+    pub time: DateTime,
     /// Terminal width from `--columns` or the config file, from `1` to `MAX_COLUMNS`. `None`
     /// means it was not set; `main` then keeps piped lines whole and gives `--execute`
     /// `DEFAULT_EXECUTE_COLUMNS`.
@@ -182,8 +193,9 @@ impl Settings {
     /// Combines the command line and the config file, falling back to the defaults.
     ///
     /// `terminal` is the font of the terminal shotty runs in. It comes after the command line and
-    /// the config file for the family and the size each, and before the defaults. `now` names the
-    /// file when no output path is given, as `shotty-<now>.<extension>`.
+    /// the config file for the family and the size each, and before the defaults. `now` is the local
+    /// time: the clock on a desktop shows it, and without an output path it names the file as
+    /// `shotty-<date>-<time>.<extension>`.
     ///
     /// # Errors
     ///
@@ -193,7 +205,7 @@ impl Settings {
         args: RenderArgs,
         config: ConfigFile,
         terminal: Option<TerminalFont>,
-        now: &str,
+        now: DateTime,
     ) -> Result<Self> {
         let extension = args.output.as_deref().and_then(Path::extension);
         let format = match (args.format, extension) {
@@ -206,9 +218,13 @@ impl Settings {
             }
             (None, None) => config.format.unwrap_or(ImageFormat::Png),
         };
-        let output = args
-            .output
-            .unwrap_or_else(|| PathBuf::from(format!("shotty-{now}.{}", format.extension())));
+        let output = args.output.unwrap_or_else(|| {
+            PathBuf::from(format!(
+                "shotty-{}.{}",
+                now.strftime(FILE_TIMESTAMP_FORMAT),
+                format.extension()
+            ))
+        });
         let theme_name = args
             .theme
             .or(config.theme)
@@ -264,6 +280,8 @@ impl Settings {
             window: !args.no_window && config.window.unwrap_or(true),
             shadow: !args.no_shadow && config.shadow.unwrap_or(true),
             backdrop,
+            desktop: args.desktop.or(config.desktop),
+            time: now,
             columns: args
                 .columns
                 .or(config.columns)
@@ -294,7 +312,8 @@ fn in_range<T: PartialOrd + Copy + std::fmt::Display>(
 mod tests {
     use super::*;
 
-    const NOW: &str = "20261120-101500";
+    /// The local time the tests run at.
+    const NOW: DateTime = jiff::civil::date(2026, 11, 20).at(10, 15, 0, 0);
 
     #[test]
     fn defaults_apply_without_flags_or_config() {

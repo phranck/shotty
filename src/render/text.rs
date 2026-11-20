@@ -16,13 +16,31 @@ use crate::settings::FontChoice;
 /// Family name inside the bundled font files.
 pub const BUNDLED_FAMILY: &str = "JetBrains Mono NL";
 
-/// The bundled font files: regular, bold, italic and bold italic.
-const BUNDLED_FONTS: [&[u8]; 4] = [
+/// The bundled font files: JetBrains Mono NL regular, bold, italic and bold italic for the
+/// terminal text, and Inter regular and bold for the desktop bars.
+const BUNDLED_FONTS: [&[u8]; 6] = [
     include_bytes!("../../assets/fonts/JetBrainsMonoNL-Regular.ttf"),
     include_bytes!("../../assets/fonts/JetBrainsMonoNL-Bold.ttf"),
     include_bytes!("../../assets/fonts/JetBrainsMonoNL-Italic.ttf"),
     include_bytes!("../../assets/fonts/JetBrainsMonoNL-BoldItalic.ttf"),
+    include_bytes!("../../assets/fonts/Inter-Regular.ttf"),
+    include_bytes!("../../assets/fonts/Inter-Bold.ttf"),
 ];
+
+/// Family name inside the bundled interface font files.
+pub const UI_FAMILY: &str = "Inter";
+
+/// Line height of interface text as a multiple of its size.
+const UI_LINE_HEIGHT: f32 = 1.2;
+
+/// Size and weight of interface text, such as the clock in a desktop bar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UiStyle {
+    /// Font size in pixels.
+    pub size_px: f32,
+    /// `true` sets the text in Inter Bold, `false` in Inter Regular.
+    pub bold: bool,
+}
 
 /// Locale for shaping decisions that depend on language. Terminal output carries no language, so
 /// a fixed one keeps the result the same on every machine.
@@ -92,6 +110,37 @@ impl Typesetter {
     /// Draws `text` in the regular style with its left edge at `x` and the top of its line at `y`.
     pub fn draw_text(&mut self, canvas: &mut Canvas, text: &str, x: f32, y: f32, color: Rgb) {
         let buffer = self.shape_regular(text);
+        self.draw_buffer(canvas, &buffer, x, y, color);
+    }
+
+    /// Width of `text` in pixels when set in the interface font in `style`.
+    pub fn measure_ui(&mut self, text: &str, style: UiStyle) -> f32 {
+        let buffer = self.shape_ui(text, style);
+        buffer
+            .layout_runs()
+            .map(|run| run.line_w)
+            .fold(0.0, f32::max)
+    }
+
+    /// Draws `text` in the interface font in `style`, with its left edge at `x` and centered
+    /// vertically on `center_y`.
+    pub fn draw_ui_text(
+        &mut self,
+        canvas: &mut Canvas,
+        text: &str,
+        x: f32,
+        center_y: f32,
+        style: UiStyle,
+        color: Rgb,
+    ) {
+        let buffer = self.shape_ui(text, style);
+        let top = center_y - style.size_px * UI_LINE_HEIGHT / 2.0;
+        self.draw_buffer(canvas, &buffer, x, top, color);
+    }
+
+    /// Draws every glyph of a shaped buffer where shaping placed it, with the buffer's top left
+    /// at `(x, y)`.
+    fn draw_buffer(&mut self, canvas: &mut Canvas, buffer: &Buffer, x: f32, y: f32, color: Rgb) {
         for run in buffer.layout_runs() {
             for glyph in run.glyphs {
                 let physical = glyph.physical((x, y + run.line_y), 1.0);
@@ -181,12 +230,22 @@ impl Typesetter {
         self.shape(&[(text, attrs_for(&family, false, false))])
     }
 
-    /// Shapes spans of text into a buffer without wrapping.
+    /// Shapes spans of text at the terminal font size into a buffer without wrapping.
     fn shape(&mut self, spans: &[(&str, Attrs<'_>)]) -> Buffer {
-        let mut buffer = Buffer::new(
-            &mut self.font_system,
-            Metrics::new(self.font_px, self.line_px),
-        );
+        self.shape_with(spans, Metrics::new(self.font_px, self.line_px))
+    }
+
+    /// Shapes `text` in the interface font in `style`.
+    fn shape_ui(&mut self, text: &str, style: UiStyle) -> Buffer {
+        self.shape_with(
+            &[(text, attrs_for(UI_FAMILY, style.bold, false))],
+            Metrics::new(style.size_px, style.size_px * UI_LINE_HEIGHT),
+        )
+    }
+
+    /// Shapes spans of text with the given metrics into a buffer without wrapping.
+    fn shape_with(&mut self, spans: &[(&str, Attrs<'_>)], metrics: Metrics) -> Buffer {
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_wrap(Wrap::None);
         buffer.set_size(None, None);
         let default_attrs = attrs_for(&self.family, false, false);

@@ -118,6 +118,16 @@ impl ImageFormat {
     }
 }
 
+/// Desktops shotty can draw behind the window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Desktop {
+    /// A macOS desktop: wallpaper and menu bar.
+    Macos,
+    /// A GNOME desktop on Linux: wallpaper and top bar.
+    Linux,
+}
+
 /// Options for rendering. Every one of them is optional so that the config file can fill the gaps.
 #[derive(Debug, Default, Args)]
 pub struct RenderArgs {
@@ -175,6 +185,10 @@ pub struct RenderArgs {
     #[arg(long, value_name = "COLOR",
           help = format!("Color around the window: {0} or #rrggbb; a JPG shows white for {0} [default: {0}]", Backdrop::TRANSPARENT_KEYWORD))]
     pub background: Option<String>,
+
+    /// Put a desktop with wallpaper and top bar behind the window; replaces --background
+    #[arg(long, value_enum)]
+    pub desktop: Option<Desktop>,
 
     /// Run COMMAND in a terminal and render its output instead of reading standard input; the title defaults to COMMAND
     #[arg(short, long, value_name = "COMMAND")]

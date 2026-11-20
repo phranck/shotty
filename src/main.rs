@@ -23,9 +23,6 @@ use crate::cli::{Cli, Command, RenderArgs};
 use crate::output::Image;
 use crate::settings::{ConfigFile, DEFAULT_EXECUTE_COLUMNS, Settings};
 
-/// Timestamp format in default output file names, for example `20261120-101500`.
-const FILE_TIMESTAMP_FORMAT: &str = "%Y%m%d-%H%M%S";
-
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -65,12 +62,10 @@ fn render_input(args: RenderArgs) -> Result<()> {
         Some(path) => ConfigFile::load(&path)?,
         None => ConfigFile::default(),
     };
-    let now = jiff::ZonedDateTime::now()
-        .strftime(FILE_TIMESTAMP_FORMAT)
-        .to_string();
+    let now = jiff::ZonedDateTime::now().datetime();
     let command = args.execute.clone();
     let copy_to_clipboard = args.clipboard;
-    let settings = Settings::resolve(args, config, terminal_font::detect(), &now)?;
+    let settings = Settings::resolve(args, config, terminal_font::detect(), now)?;
 
     // A command always runs in a terminal of some width; piped lines stay whole unless a width is set.
     let (input, columns) = match &command {

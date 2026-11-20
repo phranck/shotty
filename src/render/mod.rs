@@ -1,6 +1,7 @@
 //! Turns a parsed screen into pixels: window, cell backgrounds, text and text decorations.
 
 mod canvas;
+mod desktop;
 mod text;
 mod window;
 
@@ -48,6 +49,28 @@ struct CellColors {
     background: Option<Rgb>,
 }
 
+/// Space around the window on the canvas, in pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Insets {
+    /// Above the window; with a desktop, this includes its top bar.
+    top: f32,
+    /// Left and right of the window each, at the least; a wide desktop bar can widen the canvas.
+    side: f32,
+    /// Below the window.
+    bottom: f32,
+}
+
+impl Insets {
+    /// The same space `amount` on every side.
+    fn uniform(amount: f32) -> Self {
+        Self {
+            top: amount,
+            side: amount,
+            bottom: amount,
+        }
+    }
+}
+
 /// Resolves a cell style against a theme.
 fn cell_colors(style: &Style, theme: &Theme) -> CellColors {
     let resolve = |color: TermColor| match color {
@@ -69,11 +92,6 @@ fn cell_colors(style: &Style, theme: &Theme) -> CellColors {
     }
 }
 
-/// Renders a screen with the given settings.
-///
-/// # Errors
-///
-/// Fails when the configured font is not installed or the image would be too large.
 pub fn render(screen: &Screen, settings: &Settings) -> Result<Canvas> {
     let scale = settings.scale;
     let font_px = settings.font_size * scale;
@@ -90,10 +108,15 @@ pub fn render(screen: &Screen, settings: &Settings) -> Result<Canvas> {
         .as_deref()
         .map_or(0.0, |title| typesetter.measure(title));
 
-    let (margin, title_bar) = if settings.window {
-        (window::MARGIN * scale, window::TITLE_BAR_HEIGHT * scale)
+    let title_bar = if settings.window {
+        window::TITLE_BAR_HEIGHT * scale
     } else {
-        (0.0, 0.0)
+        0.0
+    };
+    let insets = match settings.desktop {
+        Some(desktop) => desktop::insets(desktop, scale),
+        None if settings.window => Insets::uniform(window::MARGIN * scale),
+        None => Insets::uniform(0.0),
     };
     let mut window_width = text_width + 2.0 * padding;
     if settings.window {
@@ -106,14 +129,18 @@ pub fn render(screen: &Screen, settings: &Settings) -> Result<Canvas> {
     }
     let window_width = window_width.ceil();
     let window_height = (title_bar + text_height + 2.0 * padding).ceil();
+    let bar_width = settings.desktop.map_or(0.0, |desktop| {
+        desktop::min_width(&mut typesetter, desktop, &settings.time, scale).ceil()
+    });
+    let width = (window_width + 2.0 * insets.side).max(bar_width);
+    let height = window_height + insets.top + insets.bottom;
     let frame = Bounds {
-        x: margin,
-        y: margin,
+        x: ((width - window_width) / 2.0).round(),
+        y: insets.top,
         width: window_width,
         height: window_height,
     };
 
-    let (width, height) = (window_width + 2.0 * margin, window_height + 2.0 * margin);
     if f64::from(width) * f64::from(height) > MAX_PIXELS {
         bail!(
             "the image would be {width}×{height} pixels, more than {} megapixels; use a smaller --scale or --font-size, or less output",
@@ -121,8 +148,12 @@ pub fn render(screen: &Screen, settings: &Settings) -> Result<Canvas> {
         );
     }
     let mut canvas = Canvas::new(width as u32, height as u32)?;
-    if let Backdrop::Solid(color) = settings.backdrop {
-        canvas.fill(color);
+    match (settings.desktop, settings.backdrop) {
+        (Some(desktop), _) => {
+            desktop::draw(&mut canvas, &mut typesetter, desktop, &settings.time, scale);
+        }
+        (None, Backdrop::Solid(color)) => canvas.fill(color),
+        (None, Backdrop::Transparent) => {}
     }
     if settings.window {
         if settings.shadow {
@@ -254,7 +285,7 @@ fn draw_decorations(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::RenderArgs;
+    use crate::cli::{Desktop, RenderArgs};
     use crate::settings::ConfigFile;
 
     fn theme() -> Theme {
@@ -303,7 +334,13 @@ mod tests {
     }
 
     fn settings(args: RenderArgs) -> Settings {
-        Settings::resolve(args, ConfigFile::default(), None, "test").unwrap()
+        Settings::resolve(
+            args,
+            ConfigFile::default(),
+            None,
+            jiff::civil::date(2026, 11, 20).at(10, 15, 0, 0),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -367,5 +404,32 @@ mod tests {
         let canvas = render(&Screen::parse(b"x", None), &settings).unwrap();
         assert_eq!(canvas.pixel(0, 0)[3], 0);
         assert!(canvas.width() as f32 >= window::title_bar_reserved_width() + 2.0 * window::MARGIN);
+    }
+
+    #[test]
+    fn desktop_replaces_the_background_and_fits_its_bar() {
+        for desktop in [Desktop::Macos, Desktop::Linux] {
+            let settings = settings(RenderArgs {
+                scale: Some(1.0),
+                desktop: Some(desktop),
+                background: Some("#ff0000".to_owned()),
+                ..RenderArgs::default()
+            });
+            let canvas = render(&Screen::parse(b"x", None), &settings).unwrap();
+            let corner = canvas.pixel(0, canvas.height() - 1);
+            assert_eq!(corner[3], OPAQUE, "{desktop:?}");
+            assert_ne!(
+                corner[..3],
+                [0xff, 0, 0],
+                "{desktop:?} shows the background color"
+            );
+            let mut typesetter = Typesetter::new(&settings.font, 14.0, 20.0).unwrap();
+            let bar = desktop::min_width(&mut typesetter, desktop, &settings.time, 1.0);
+            assert!(
+                canvas.width() as f32 >= bar,
+                "{desktop:?}: {} < {bar}",
+                canvas.width()
+            );
+        }
     }
 }
