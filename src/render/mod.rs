@@ -78,7 +78,7 @@ pub fn render(screen: &Screen, settings: &Settings) -> Result<Canvas> {
     let scale = settings.scale;
     let font_px = settings.font_size * scale;
     let line_px = (font_px * settings.line_height).round();
-    let mut typesetter = Typesetter::new(settings.font.as_deref(), font_px, line_px)?;
+    let mut typesetter = Typesetter::new(&settings.font, font_px, line_px)?;
     let cell_width = typesetter.cell_width();
     let padding = settings.padding * scale;
     let theme = &settings.theme;
@@ -303,7 +303,7 @@ mod tests {
     }
 
     fn settings(args: RenderArgs) -> Settings {
-        Settings::resolve(args, ConfigFile::default(), "test").unwrap()
+        Settings::resolve(args, ConfigFile::default(), None, "test").unwrap()
     }
 
     #[test]

@@ -134,13 +134,14 @@ pub struct RenderArgs {
           help = format!("Color theme [default: {}]", theme::DEFAULT_THEME))]
     pub theme: Option<String>,
 
-    /// Font family installed on this system [default: the bundled JetBrains Mono]
-    #[arg(long, value_name = "FAMILY")]
+    /// Font family installed on this system, or `bundled` for the bundled JetBrains Mono.
+    #[arg(long, value_name = "FAMILY",
+          help = format!("Font family installed on this system, or `{}` for the bundled JetBrains Mono [default: the terminal's font, else the bundled one]", settings::BUNDLED_FONT_KEYWORD))]
     pub font: Option<String>,
 
     /// Font size in points.
     #[arg(long, value_name = "POINTS",
-          help = format!("Font size in points [default: {}]", settings::DEFAULT_FONT_SIZE))]
+          help = format!("Font size in points [default: the terminal's size, else {}]", settings::DEFAULT_FONT_SIZE))]
     pub font_size: Option<f32>,
 
     /// Line height as a multiple of the font size.

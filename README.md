@@ -54,7 +54,10 @@ Without `-o`, the image is called `shotty-<date>-<time>.png` and lands in the cu
 | `--title <TEXT>` | Text in the title bar |
 | `--no-window`, `--no-shadow` | Leave out the window frame or its shadow |
 | `--background <COLOR>` | Color around the window, `transparent` or `#rrggbb` |
-| `--font`, `--font-size`, `--line-height`, `--padding`, `--scale` | Typography and size |
+| `--font <FAMILY>`, `--font-size <POINTS>` | Font and size, the terminal's by default; `--font bundled` picks the bundled JetBrains Mono |
+| `--line-height`, `--padding`, `--scale` | Spacing and resolution |
+
+shotty uses the font and font size of the terminal it runs in, so the picture looks like that terminal. It reads them from iTerm2 and Terminal.app. In other terminals, or when the terminal's font is not installed, it uses the bundled JetBrains Mono at 14 points.
 
 `shotty --help` and `man shotty` describe every option with its default and list the bundled themes.
 

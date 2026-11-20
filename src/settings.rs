@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 use crate::cli::{ImageFormat, RenderArgs};
 use crate::color::Backdrop;
+use crate::terminal_font::TerminalFont;
 use crate::theme::{self, Theme};
 
 /// Directory below the config home that holds shotty's files.
@@ -42,6 +43,10 @@ pub const DEFAULT_EXECUTE_COLUMNS: u16 = 80;
 
 /// Widest accepted terminal. The parser drops columns beyond `ansi::MAX_COLUMNS` anyway.
 const MAX_COLUMNS: u16 = crate::ansi::MAX_COLUMNS as u16;
+
+/// Value of `--font` and of the `font` key that selects the bundled font instead of the
+/// terminal's.
+pub const BUNDLED_FONT_KEYWORD: &str = "bundled";
 
 /// Smallest accepted font size in points. Below it glyphs turn into noise.
 const MIN_FONT_SIZE: f32 = 4.0;
@@ -126,6 +131,20 @@ pub fn config_directory() -> Option<PathBuf> {
     Some(home.join(APP_DIRECTORY))
 }
 
+/// The font the text is set in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FontChoice {
+    /// The bundled JetBrains Mono NL, chosen with `BUNDLED_FONT_KEYWORD` or when the terminal's
+    /// font is unknown.
+    Bundled,
+    /// An installed family named with `--font` or the config file. It is an error when it is not
+    /// installed.
+    Family(String),
+    /// The terminal's font, by the PostScript name of its regular face. The bundled font stands in
+    /// when it is not installed.
+    Terminal(String),
+}
+
 /// Everything the renderer needs, with every value decided.
 #[derive(Clone, Debug)]
 pub struct Settings {
@@ -135,8 +154,8 @@ pub struct Settings {
     pub format: ImageFormat,
     /// Colors.
     pub theme: Theme,
-    /// Installed font family; `None` uses the bundled font.
-    pub font: Option<String>,
+    /// Font of the text.
+    pub font: FontChoice,
     /// Font size in points.
     pub font_size: f32,
     /// Line height as a multiple of the font size.
@@ -162,13 +181,20 @@ pub struct Settings {
 impl Settings {
     /// Combines the command line and the config file, falling back to the defaults.
     ///
-    /// `now` names the file when no output path is given, as `shotty-<now>.<extension>`.
+    /// `terminal` is the font of the terminal shotty runs in. It comes after the command line and
+    /// the config file for the family and the size each, and before the defaults. `now` names the
+    /// file when no output path is given, as `shotty-<now>.<extension>`.
     ///
     /// # Errors
     ///
     /// Fails on an output extension other than `.png`, `.jpg` or `.jpeg` without `--format`, an
     /// unknown theme, an unparsable background, or a number outside its accepted range.
-    pub fn resolve(args: RenderArgs, config: ConfigFile, now: &str) -> Result<Self> {
+    pub fn resolve(
+        args: RenderArgs,
+        config: ConfigFile,
+        terminal: Option<TerminalFont>,
+        now: &str,
+    ) -> Result<Self> {
         let extension = args.output.as_deref().and_then(Path::extension);
         let format = match (args.format, extension) {
             (Some(format), _) => format,
@@ -196,11 +222,20 @@ impl Settings {
             output,
             format,
             theme: Theme::bundled(&theme_name)?,
-            font: args.font.or(config.font),
+            font: match args.font.or(config.font) {
+                Some(name) if name.eq_ignore_ascii_case(BUNDLED_FONT_KEYWORD) => {
+                    FontChoice::Bundled
+                }
+                Some(name) => FontChoice::Family(name),
+                None => terminal.as_ref().map_or(FontChoice::Bundled, |font| {
+                    FontChoice::Terminal(font.postscript_name.clone())
+                }),
+            },
             font_size: in_range(
                 "font-size",
                 args.font_size
                     .or(config.font_size)
+                    .or(terminal.as_ref().map(|font| font.size))
                     .unwrap_or(DEFAULT_FONT_SIZE),
                 MIN_FONT_SIZE,
                 MAX_FONT_SIZE,
@@ -264,7 +299,7 @@ mod tests {
     #[test]
     fn defaults_apply_without_flags_or_config() {
         let settings =
-            Settings::resolve(RenderArgs::default(), ConfigFile::default(), NOW).unwrap();
+            Settings::resolve(RenderArgs::default(), ConfigFile::default(), None, NOW).unwrap();
         assert_eq!(settings.output, PathBuf::from("shotty-20261120-101500.png"));
         assert_eq!(settings.format, ImageFormat::Png);
         assert_eq!(settings.font_size, DEFAULT_FONT_SIZE);
@@ -281,7 +316,7 @@ mod tests {
         let config: ConfigFile =
             toml::from_str("font-size = 16\npadding = 8\nwindow = false\ntheme = \"nord\"")
                 .unwrap();
-        let settings = Settings::resolve(args, config, NOW).unwrap();
+        let settings = Settings::resolve(args, config, None, NOW).unwrap();
         assert_eq!(settings.font_size, 20.0);
         assert_eq!(settings.padding, 8.0);
         assert!(!settings.window);
@@ -295,7 +330,7 @@ mod tests {
             ..RenderArgs::default()
         };
         assert_eq!(
-            Settings::resolve(args, ConfigFile::default(), NOW)
+            Settings::resolve(args, ConfigFile::default(), None, NOW)
                 .unwrap()
                 .format,
             ImageFormat::Jpg
@@ -309,7 +344,7 @@ mod tests {
             ..RenderArgs::default()
         };
         assert_eq!(
-            Settings::resolve(args, ConfigFile::default(), NOW)
+            Settings::resolve(args, ConfigFile::default(), None, NOW)
                 .unwrap()
                 .output,
             PathBuf::from("shotty-20261120-101500.jpg")
@@ -322,8 +357,68 @@ mod tests {
             execute: Some("git status".to_owned()),
             ..RenderArgs::default()
         };
-        let settings = Settings::resolve(args, ConfigFile::default(), NOW).unwrap();
+        let settings = Settings::resolve(args, ConfigFile::default(), None, NOW).unwrap();
         assert_eq!(settings.title.as_deref(), Some("git status"));
+    }
+
+    /// The font of a terminal profile, as `terminal_font::detect` reports it.
+    fn terminal() -> Option<TerminalFont> {
+        Some(TerminalFont {
+            postscript_name: "FiraCodeNF-Reg".to_owned(),
+            size: 15.0,
+        })
+    }
+
+    #[test]
+    fn terminal_font_comes_after_flags_and_config() {
+        let settings = Settings::resolve(
+            RenderArgs::default(),
+            ConfigFile::default(),
+            terminal(),
+            NOW,
+        )
+        .unwrap();
+        assert_eq!(
+            settings.font,
+            FontChoice::Terminal("FiraCodeNF-Reg".to_owned())
+        );
+        assert_eq!(settings.font_size, 15.0);
+
+        let config: ConfigFile = toml::from_str("font = \"Menlo\"\nfont-size = 12").unwrap();
+        let settings = Settings::resolve(RenderArgs::default(), config, terminal(), NOW).unwrap();
+        assert_eq!(settings.font, FontChoice::Family("Menlo".to_owned()));
+        assert_eq!(settings.font_size, 12.0);
+
+        let args = RenderArgs {
+            font: Some("Monaco".to_owned()),
+            ..RenderArgs::default()
+        };
+        let settings = Settings::resolve(args, ConfigFile::default(), terminal(), NOW).unwrap();
+        assert_eq!(settings.font, FontChoice::Family("Monaco".to_owned()));
+        assert_eq!(
+            settings.font_size, 15.0,
+            "the terminal's size stays when only the family is set"
+        );
+    }
+
+    #[test]
+    fn bundled_keyword_and_unknown_terminal_select_the_bundled_font() {
+        let args = RenderArgs {
+            font: Some("Bundled".to_owned()),
+            ..RenderArgs::default()
+        };
+        assert_eq!(
+            Settings::resolve(args, ConfigFile::default(), terminal(), NOW)
+                .unwrap()
+                .font,
+            FontChoice::Bundled
+        );
+        let settings =
+            Settings::resolve(RenderArgs::default(), ConfigFile::default(), None, NOW).unwrap();
+        assert_eq!(
+            (settings.font, settings.font_size),
+            (FontChoice::Bundled, DEFAULT_FONT_SIZE)
+        );
     }
 
     #[test]
@@ -337,12 +432,12 @@ mod tests {
             scale: Some(100.0),
             ..RenderArgs::default()
         };
-        assert!(Settings::resolve(args, ConfigFile::default(), NOW).is_err());
+        assert!(Settings::resolve(args, ConfigFile::default(), None, NOW).is_err());
         let args = RenderArgs {
             font_size: Some(f32::NAN),
             ..RenderArgs::default()
         };
-        assert!(Settings::resolve(args, ConfigFile::default(), NOW).is_err());
+        assert!(Settings::resolve(args, ConfigFile::default(), None, NOW).is_err());
     }
 
     #[test]
@@ -357,7 +452,7 @@ mod tests {
             output: Some("shot.gif".into()),
             ..RenderArgs::default()
         };
-        let error = Settings::resolve(args, ConfigFile::default(), NOW).unwrap_err();
+        let error = Settings::resolve(args, ConfigFile::default(), None, NOW).unwrap_err();
         assert!(error.to_string().contains(".gif"), "{error}");
 
         let args = RenderArgs {
@@ -365,12 +460,12 @@ mod tests {
             format: Some(ImageFormat::Png),
             ..RenderArgs::default()
         };
-        assert!(Settings::resolve(args, ConfigFile::default(), NOW).is_ok());
+        assert!(Settings::resolve(args, ConfigFile::default(), None, NOW).is_ok());
     }
 
     #[test]
     fn columns_from_the_config_are_checked() {
         let config: ConfigFile = toml::from_str("columns = 0").unwrap();
-        assert!(Settings::resolve(RenderArgs::default(), config, NOW).is_err());
+        assert!(Settings::resolve(RenderArgs::default(), config, None, NOW).is_err());
     }
 }

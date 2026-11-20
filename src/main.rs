@@ -9,6 +9,7 @@ mod maintenance;
 mod output;
 mod render;
 mod settings;
+mod terminal_font;
 mod theme;
 
 use std::io::{self, IsTerminal, Read};
@@ -69,7 +70,7 @@ fn render_input(args: RenderArgs) -> Result<()> {
         .to_string();
     let command = args.execute.clone();
     let copy_to_clipboard = args.clipboard;
-    let settings = Settings::resolve(args, config, &now)?;
+    let settings = Settings::resolve(args, config, terminal_font::detect(), &now)?;
 
     // A command always runs in a terminal of some width; piped lines stay whole unless a width is set.
     let (input, columns) = match &command {
