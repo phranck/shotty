@@ -5,7 +5,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-/// File signatures from the PNG and JPEG specifications.
+/// File signatures from the PNG and JPEG specifications. The unit tests in `src/output.rs` hold the
+/// same two, because this crate cannot reach that private module.
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 const JPEG_SIGNATURE: &[u8] = &[0xff, 0xd8, 0xff];
 
@@ -13,18 +14,21 @@ const JPEG_SIGNATURE: &[u8] = &[0xff, 0xd8, 0xff];
 struct Scratch(PathBuf);
 
 impl Scratch {
+    /// Creates a directory named after the test and this process, so parallel runs do not meet.
     fn new(name: &str) -> Self {
         let path = std::env::temp_dir().join(format!("shotty-test-{name}-{}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         Self(path)
     }
 
+    /// The directory's path.
     fn path(&self) -> &Path {
         &self.0
     }
 }
 
 impl Drop for Scratch {
+    /// Removes the directory with everything the test wrote into it.
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }

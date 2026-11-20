@@ -25,8 +25,9 @@ const GRAY_BASE: u8 = 8;
 /// Distance between two neighboring grays in the ramp.
 const GRAY_STEP: u8 = 10;
 
-/// Channel value of the first nonzero cube step; each further step adds `CUBE_STEP_SIZE`.
-const CUBE_FIRST_LEVEL: u8 = 55;
+/// Base of the nonzero cube levels: step `n` from `1` to `5` has the channel value
+/// `CUBE_LEVEL_BASE + n × CUBE_STEP_SIZE`, so the levels are `0, 95, 135, 175, 215, 255`.
+const CUBE_LEVEL_BASE: u8 = 55;
 
 /// Distance between two nonzero cube steps.
 const CUBE_STEP_SIZE: u8 = 40;
@@ -113,7 +114,7 @@ impl Theme {
             if step == 0 {
                 0
             } else {
-                CUBE_FIRST_LEVEL + step * CUBE_STEP_SIZE
+                CUBE_LEVEL_BASE + step * CUBE_STEP_SIZE
             }
         };
         Rgb::new(
@@ -171,7 +172,7 @@ fn parse(source: &str) -> Result<Theme> {
         }
     }
 
-    let mut resolved = [Rgb::new(0, 0, 0); ANSI_COLOR_COUNT];
+    let mut resolved = [Rgb::BLACK; ANSI_COLOR_COUNT];
     for (index, color) in palette.iter().enumerate() {
         resolved[index] = color.ok_or_else(|| anyhow!("palette color {index} is missing"))?;
     }
@@ -213,7 +214,7 @@ mod tests {
     fn indexed_colors_follow_xterm() {
         let theme = Theme::bundled(DEFAULT_THEME).unwrap();
         assert_eq!(theme.indexed(1), theme.palette[1]);
-        assert_eq!(theme.indexed(16), Rgb::new(0, 0, 0));
+        assert_eq!(theme.indexed(16), Rgb::BLACK);
         assert_eq!(theme.indexed(196), Rgb::new(255, 0, 0));
         assert_eq!(theme.indexed(231), Rgb::new(255, 255, 255));
         assert_eq!(theme.indexed(232), Rgb::new(8, 8, 8));

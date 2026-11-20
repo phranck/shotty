@@ -3,16 +3,10 @@
 use anyhow::{Result, anyhow};
 use tiny_skia::{FillRule, Paint, Path, PathBuilder, Pixmap, Rect, Transform};
 
-use crate::color::Rgb;
-
-/// Bytes per pixel in the RGBA buffer.
-const BYTES_PER_PIXEL: usize = 4;
-
-/// Largest value of an 8 bit channel, as an integer for the blending arithmetic.
-const CHANNEL_MAX: u32 = 255;
+use crate::color::{CHANNEL_MAX, RGBA_BYTES, Rgb, blend_channel};
 
 /// Fully opaque alpha.
-pub const OPAQUE: u8 = 255;
+pub const OPAQUE: u8 = CHANNEL_MAX;
 
 /// Bézier handle length for a quarter circle, as a fraction of the radius.
 const QUARTER_CIRCLE_KAPPA: f32 = 0.552_284_8;
@@ -138,18 +132,14 @@ impl Canvas {
         if alpha == 0 || x >= self.width() || y >= self.height() {
             return;
         }
-        let offset = (y as usize * self.width() as usize + x as usize) * BYTES_PER_PIXEL;
-        let pixel = &mut self.pixmap.data_mut()[offset..offset + BYTES_PER_PIXEL];
-        let source_alpha = u32::from(alpha);
-        let keep = CHANNEL_MAX - source_alpha;
-        let source = [color.red, color.green, color.blue];
-        for (channel, value) in pixel.iter_mut().take(3).zip(source) {
-            *channel =
-                ((u32::from(value) * source_alpha + u32::from(*channel) * keep + CHANNEL_MAX / 2)
-                    / CHANNEL_MAX) as u8;
+        let offset = (y as usize * self.width() as usize + x as usize) * RGBA_BYTES;
+        let pixel = &mut self.pixmap.data_mut()[offset..offset + RGBA_BYTES];
+        for (channel, value) in pixel
+            .iter_mut()
+            .zip([color.red, color.green, color.blue, OPAQUE])
+        {
+            *channel = blend_channel(value, *channel, alpha);
         }
-        pixel[3] = ((source_alpha * CHANNEL_MAX + u32::from(pixel[3]) * keep + CHANNEL_MAX / 2)
-            / CHANNEL_MAX) as u8;
     }
 
     /// Draws another canvas of the same size over this one.
@@ -176,9 +166,9 @@ impl Canvas {
 
     /// The premultiplied RGBA value of one pixel, for tests that check what was drawn.
     #[cfg(test)]
-    pub fn pixel(&self, x: u32, y: u32) -> [u8; BYTES_PER_PIXEL] {
-        let offset = (y * self.width() + x) as usize * BYTES_PER_PIXEL;
-        self.data()[offset..offset + BYTES_PER_PIXEL]
+    pub fn pixel(&self, x: u32, y: u32) -> [u8; RGBA_BYTES] {
+        let offset = (y * self.width() + x) as usize * RGBA_BYTES;
+        self.data()[offset..offset + RGBA_BYTES]
             .try_into()
             .expect("slice has the length of a pixel")
     }

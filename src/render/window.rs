@@ -71,7 +71,7 @@ pub fn draw_shadow(canvas: &mut Canvas, frame: Bounds, scale: f32) {
     shadow.fill_rounded_rect(
         frame.moved_down(SHADOW_OFFSET * scale),
         CORNER_RADIUS * scale,
-        Rgb::new(0, 0, 0),
+        Rgb::BLACK,
         SHADOW_ALPHA,
     );
     let (width, height) = (shadow.width(), shadow.height());

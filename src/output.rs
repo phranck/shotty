@@ -10,14 +10,11 @@ use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 
 use crate::cli::ImageFormat;
-use crate::color::Rgb;
+use crate::color::{RGBA_BYTES, Rgb, blend_channel};
 use crate::render::Canvas;
 
 /// JPEG quality from `1` to `100`. High enough that colored text keeps clean edges.
 const JPEG_QUALITY: u8 = 92;
-
-/// Bytes per pixel in straight alpha RGBA.
-pub const RGBA_BYTES: usize = 4;
 
 /// A finished picture as straight alpha RGBA, the form encoders and clipboards take.
 pub struct Image {
@@ -87,18 +84,11 @@ pub fn encode(image: &Image, format: ImageFormat, writer: &mut impl Write) -> Re
 
 /// Lays straight alpha RGBA pixels over an opaque `underlay` and returns RGB bytes.
 fn flatten(rgba: &[u8], underlay: Rgb) -> Vec<u8> {
-    const CHANNEL_MAX: u32 = 255;
     let underlay = [underlay.red, underlay.green, underlay.blue];
     let mut rgb = Vec::with_capacity(rgba.len() / RGBA_BYTES * 3);
     for pixel in rgba.as_chunks::<RGBA_BYTES>().0 {
-        let alpha = u32::from(pixel[3]);
         for (value, below) in pixel[..3].iter().zip(underlay) {
-            rgb.push(
-                ((u32::from(*value) * alpha
-                    + u32::from(below) * (CHANNEL_MAX - alpha)
-                    + CHANNEL_MAX / 2)
-                    / CHANNEL_MAX) as u8,
-            );
+            rgb.push(blend_channel(*value, below, pixel[3]));
         }
     }
     rgb
@@ -108,7 +98,8 @@ fn flatten(rgba: &[u8], underlay: Rgb) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    /// File signatures from the PNG and JPEG specifications.
+    /// File signatures from the PNG and JPEG specifications. `tests/cli.rs` holds the same two,
+    /// because an integration test cannot reach a private test module.
     const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
     const JPEG_SIGNATURE: &[u8] = &[0xff, 0xd8, 0xff];
 
